@@ -1,0 +1,63 @@
+# Finance Report Extractor - main configuration
+# Values here can be overridden by environment variables (see .env.example)
+
+input_directory: "./LAPORAN KEUANGAN"
+output_directory: "./output"
+database_url: "sqlite:///./database/processing.db"
+
+processing:
+  workers: 8
+  ocr_workers: 4
+  max_pages_per_document: 0        # 0 = no limit
+  raw_data_directory: "./data"
+  mode: "balanced"                 # fast | balanced | accurate
+  max_ai_concurrent_requests: 2    # respect provider rate limits
+  text_char_threshold: 100         # chars below this => page needs OCR (per-page)
+  min_financial_page_score: 3      # relevance score needed for expensive processing
+  table_max_pages: 60              # cap pages sent to table extraction per doc
+
+ocr:
+  engine: "tesseract"              # tesseract | none
+  language: "ind+eng"               # missing traineddata is dropped with a warning
+  dpi: 300
+  preprocess:
+    deskew: true
+    denoise: true
+    binarize: true
+  cache: true                      # cache rendered OCR page images/text
+  # Private scratch dir for tesseract's per-page PNG/TSV files. pytesseract
+  # would otherwise write them into the shared system %TEMP% and re-enumerate
+  # that whole directory after every call, which stalls the worker pool.
+  temp_dir: "./data/tmp/tesseract"
+  # Language packs. The tesseract install dir (Program Files) is read-only
+  # without admin, so keep copies here and point tesseract at this directory.
+  # Must contain every language listed above plus "eng".
+  tessdata_dir: "./data/tessdata"
+  max_concurrent: 4                # simultaneous tesseract processes (each is multi-threaded)
+  detect_orientation: false        # image_to_osd costs a 2nd tesseract run per page
+
+pdf:
+  text_char_threshold: 100         # chars per page below this => considered scanned
+
+ai:
+  provider: "none"                 # none | openai | openai-compatible | ollama
+  model: "gpt-4o-mini"
+  temperature: 0.0
+  max_tokens: 4000
+  cache: true
+  relevant_page_strategy: "keyword"  # only send pages that look like financial statements
+
+confidence:
+  high: 0.95
+  medium: 0.80                     # below this => LOW / review
+  review_threshold: 0.80
+
+validation:
+  tolerance: 0.01                  # legacy relative tolerance
+  absolute_tolerance: 1000         # pass if |diff| <= this (scaled by report unit)
+  relative_tolerance: 0.001        # OR |diff|/expected <= this (0.1%)
+
+language: "id+en"
+
+# Security: external AI providers receive document text. Explicit acknowledgement required.
+send_to_external_ai: false

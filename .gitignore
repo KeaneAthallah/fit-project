@@ -1,0 +1,18 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+database/
+data/
+logs/
+output/
+review/
+.pytest_cache/
+frontend/node_modules/
+frontend/dist/
+
+# Source financial reports (3.3 GB of PDFs). Data, not code: regenerable only by
+# re-obtaining the filings, so back these up separately rather than in git.
+LAPORAN KEUANGAN/
+*.pdf

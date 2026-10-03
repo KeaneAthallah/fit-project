@@ -1,0 +1,340 @@
+@import 'tailwindcss';
+
+/* Class-based dark mode. The theme is set on <html> by an inline script in
+   index.html before first paint, so there is no flash of the wrong theme. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Indonesian listed-company reports are dense with figures, so the base font is
+   tightened and tabular numerals are on by default: columns of amounts must
+   align on the decimal separator. */
+@theme {
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue',
+    Arial, sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono',
+    monospace;
+}
+
+/* ==========================================================================
+   Design tokens
+
+   Every colour used anywhere in the app resolves to one of these. Components
+   must never hardcode a palette value: `bg-card text-muted-foreground
+   border-border` works in both themes without a single `dark:` variant.
+   ========================================================================== */
+
+:root {
+  color-scheme: light;
+
+  --background: oklch(0.984 0.002 250);
+  --foreground: oklch(0.21 0.012 262);
+
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.21 0.012 262);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.21 0.012 262);
+
+  --primary: oklch(0.52 0.16 258);
+  --primary-foreground: oklch(0.99 0 0);
+
+  --secondary: oklch(0.968 0.003 250);
+  --secondary-foreground: oklch(0.28 0.015 262);
+
+  --muted: oklch(0.968 0.003 250);
+  --muted-foreground: oklch(0.52 0.014 262);
+
+  --accent: oklch(0.955 0.006 258);
+  --accent-foreground: oklch(0.3 0.02 258);
+
+  --destructive: oklch(0.55 0.2 25);
+  --destructive-foreground: oklch(0.99 0 0);
+
+  --success: oklch(0.5 0.13 155);
+  --success-foreground: oklch(0.99 0 0);
+  --warning: oklch(0.62 0.15 70);
+  --warning-foreground: oklch(0.99 0 0);
+  --info: oklch(0.52 0.14 245);
+  --info-foreground: oklch(0.99 0 0);
+
+  /* Soft fills + readable text for badges, banners and alerts. */
+  --success-soft: oklch(0.955 0.03 155);
+  --success-soft-foreground: oklch(0.37 0.09 155);
+  --warning-soft: oklch(0.965 0.04 85);
+  --warning-soft-foreground: oklch(0.44 0.1 65);
+  --danger-soft: oklch(0.96 0.03 25);
+  --danger-soft-foreground: oklch(0.44 0.16 25);
+  --info-soft: oklch(0.955 0.03 250);
+  --info-soft-foreground: oklch(0.4 0.12 258);
+  --neutral-soft: oklch(0.968 0.003 250);
+  --neutral-soft-foreground: oklch(0.42 0.014 262);
+
+  --border: oklch(0.918 0.005 255);
+  --input: oklch(0.885 0.006 255);
+  --ring: oklch(0.52 0.16 258);
+
+  /* Sidebar is its own surface so it can stay distinct from the page. */
+  --sidebar: oklch(0.985 0.002 250);
+  --sidebar-foreground: oklch(0.28 0.015 262);
+  --sidebar-muted: oklch(0.5 0.014 262);
+  --sidebar-accent: oklch(0.955 0.006 258);
+  --sidebar-accent-foreground: oklch(0.3 0.02 258);
+  --sidebar-border: oklch(0.918 0.005 255);
+
+  /* Charts. Separate from the UI palette so series stay distinguishable. */
+  --chart-1: oklch(0.6 0.14 158);
+  --chart-2: oklch(0.55 0.15 258);
+  --chart-3: oklch(0.72 0.15 85);
+  --chart-4: oklch(0.6 0.19 22);
+  --chart-5: oklch(0.56 0.18 300);
+  --chart-6: oklch(0.6 0.02 255);
+  --chart-track: oklch(0.94 0.004 250);
+
+  /* The log viewer keeps a terminal look in both themes. */
+  --code-surface: oklch(0.24 0.015 262);
+  --code-foreground: oklch(0.9 0.01 250);
+
+  --radius: 0.5rem;
+}
+
+.dark {
+  color-scheme: dark;
+
+  /* Deliberately not black: the page sits darker than cards, which sit darker
+     than overlays, so elevation reads without heavy shadows. */
+  --background: oklch(0.185 0.012 262);
+  --foreground: oklch(0.955 0.004 250);
+
+  --card: oklch(0.225 0.013 262);
+  --card-foreground: oklch(0.955 0.004 250);
+  --popover: oklch(0.245 0.014 262);
+  --popover-foreground: oklch(0.955 0.004 250);
+
+  --primary: oklch(0.62 0.15 258);
+  --primary-foreground: oklch(0.15 0.02 262);
+
+  --secondary: oklch(0.265 0.014 262);
+  --secondary-foreground: oklch(0.94 0.004 250);
+
+  --muted: oklch(0.265 0.014 262);
+  --muted-foreground: oklch(0.71 0.014 262);
+
+  --accent: oklch(0.29 0.018 262);
+  --accent-foreground: oklch(0.95 0.006 258);
+
+  --destructive: oklch(0.62 0.19 25);
+  --destructive-foreground: oklch(0.14 0.02 25);
+  --success: oklch(0.62 0.13 158);
+  --success-foreground: oklch(0.15 0.02 158);
+  --warning: oklch(0.72 0.14 82);
+  --warning-foreground: oklch(0.17 0.02 82);
+  --info: oklch(0.62 0.14 245);
+  --info-foreground: oklch(0.14 0.02 245);
+
+  --success-soft: oklch(0.28 0.05 158);
+  --success-soft-foreground: oklch(0.85 0.12 158);
+  --warning-soft: oklch(0.3 0.05 82);
+  --warning-soft-foreground: oklch(0.86 0.11 82);
+  --danger-soft: oklch(0.3 0.06 25);
+  --danger-soft-foreground: oklch(0.87 0.1 25);
+  --info-soft: oklch(0.29 0.04 250);
+  --info-soft-foreground: oklch(0.87 0.07 250);
+  --neutral-soft: oklch(0.275 0.013 262);
+  --neutral-soft-foreground: oklch(0.78 0.014 262);
+
+  --border: oklch(0.315 0.014 262);
+  --input: oklch(0.36 0.015 262);
+  --ring: oklch(0.66 0.15 258);
+
+  --sidebar: oklch(0.205 0.013 262);
+  --sidebar-foreground: oklch(0.93 0.005 250);
+  --sidebar-muted: oklch(0.66 0.014 262);
+  --sidebar-accent: oklch(0.3 0.02 262);
+  --sidebar-accent-foreground: oklch(0.95 0.006 258);
+  --sidebar-border: oklch(0.315 0.014 262);
+
+  --chart-1: oklch(0.72 0.15 158);
+  --chart-2: oklch(0.68 0.15 258);
+  --chart-3: oklch(0.8 0.14 85);
+  --chart-4: oklch(0.7 0.18 22);
+  --chart-5: oklch(0.7 0.17 300);
+  --chart-6: oklch(0.68 0.02 255);
+  --chart-track: oklch(0.29 0.014 262);
+
+  --code-surface: oklch(0.16 0.012 262);
+  --code-foreground: oklch(0.92 0.008 250);
+}
+
+/* Maps the tokens above onto Tailwind utilities (bg-card, text-muted-foreground,
+   border-border, ring-ring, ...). `inline` keeps the var() reference so the
+   value is read at use time and .dark overrides cascade correctly. */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+
+  --color-success-soft: var(--success-soft);
+  --color-success-soft-foreground: var(--success-soft-foreground);
+  --color-warning-soft: var(--warning-soft);
+  --color-warning-soft-foreground: var(--warning-soft-foreground);
+  --color-danger-soft: var(--danger-soft);
+  --color-danger-soft-foreground: var(--danger-soft-foreground);
+  --color-info-soft: var(--info-soft);
+  --color-info-soft-foreground: var(--info-soft-foreground);
+  --color-neutral-soft: var(--neutral-soft);
+  --color-neutral-soft-foreground: var(--neutral-soft-foreground);
+
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-muted: var(--sidebar-muted);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+
+  --color-code-surface: var(--code-surface);
+  --color-code-foreground: var(--code-foreground);
+
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+}
+
+/* ------------------------------------------------------------------- base */
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: 'cv02', 'cv03', 'cv04';
+  }
+
+  /* One focus treatment for the whole app. Never `outline: none` - keyboard
+     users must always be able to see where they are. */
+  :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+
+  ::selection {
+    background-color: var(--accent);
+    color: var(--accent-foreground);
+  }
+
+  /* Native controls (select dropdowns, checkbox, scrollbars) follow the theme. */
+  input,
+  select,
+  textarea,
+  button {
+    font: inherit;
+    color: inherit;
+  }
+}
+
+/* --------------------------------------------------------------- utilities */
+
+/* Numeric columns line up only when every glyph is the same width. */
+@layer utilities {
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* A scrollbar that stays visible against both themes. */
+  .scroll-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--input) transparent;
+  }
+  .scroll-thin::-webkit-scrollbar {
+    height: 8px;
+    width: 8px;
+  }
+  .scroll-thin::-webkit-scrollbar-thumb {
+    background-color: var(--input);
+    border-radius: 9999px;
+  }
+  .scroll-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  /* Visually hidden but still announced by screen readers. */
+  .sr-only-focusable:not(:focus):not(:focus-within) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
+  }
+
+  /* Opt-in sticky table headers. Set on the scroll container by <Table
+     stickyHeader>, which is what gives the header a scrollport to stick
+     inside - `position: sticky` cannot work against the page from inside an
+     overflow-x-auto wrapper otherwise. */
+  .sticky-header thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+
+  /* Sticky header cells must not show a hairline through themselves while the
+     body scrolls underneath. */
+  .sticky-header thead th::after {
+    content: '';
+    position: absolute;
+    inset: auto 0 -1px 0;
+    height: 1px;
+    background-color: var(--border);
+  }
+}
+
+/* Transitions are for orientation, not decoration. When the visitor asks for
+   reduced motion they are removed entirely - except progress indicators, which
+   are status information rather than ornament and stay legible via aria-live. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  [data-essential-motion] {
+    animation-duration: revert !important;
+    animation-iteration-count: revert !important;
+  }
+}

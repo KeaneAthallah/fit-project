@@ -1,0 +1,32 @@
+# Keep the build context small and reproducible: node_modules and a
+# host-built dist are both produced inside the image, and sending them would
+# slow the build and risk baking in a stale bundle.
+frontend/node_modules
+frontend/dist
+
+# Local scratch space
+data/
+logs/
+output/
+review/
+database/
+*.db
+*.sqlite3
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Tooling / editor
+.vscode/
+.idea/
+.DS_Store
+*.sw?
+.env
+.git/
+.gitignore

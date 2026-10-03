@@ -22,6 +22,7 @@ from app.ai.schemas import DocumentExtraction
 from app.core.config import AppConfig, get_config
 from app.core.exceptions import PDFParseError
 from app.core.logging import get_logger
+from app.extraction.html_source import HtmlDocument, is_html_path, read_document
 from app.extraction.ocr import ocr_page
 from app.extraction.page_classifier import (
     classify_section,
@@ -124,10 +125,12 @@ def resolve_document_path(file_path: str | Path) -> Path:
         return raw
 
     # Stored path was absolute on a different host: keep the part below the
-    # corpus root and re-root it on this host's input directory.
+    # corpus root and re-root it on this host's input directory. Both corpus
+    # names are listed because the anchor is matched positionally, and a stored
+    # path may name either depending on which corpus produced it.
     text = str(raw).replace("\\", "/")
     parts = [p for p in text.split("/") if p]
-    for anchor in ("LAPORAN KEUANGAN", input_dir.name):
+    for anchor in ("LAPORAN KEUANGAN", "XBRL", input_dir.name):
         if anchor in parts:
             idx = parts.index(anchor)
             candidate = input_dir.joinpath(*parts[idx + 1:])
@@ -194,16 +197,25 @@ class DocumentProcessor:
         # 1. Per-page content decision: check each page's text layer and only
         # OCR pages that actually need it (requirements #14/#15).
         t0 = time.perf_counter()
-        cls = classify_pdf(str(path))
-        result.pdf_type = cls.pdf_type
-        result.page_count = cls.page_count
+        if is_html_path(path):
+            # Already text, and its page count is however many statement files
+            # the filing contains. classify_pdf() is a PyMuPDF document probe and
+            # would either fail outright or report the wrong thing.
+            result.pdf_type = "TEXT"
+            self.repo.set_status(doc, "EXTRACTING")
+        else:
+            cls = classify_pdf(str(path))
+            result.pdf_type = cls.pdf_type
+            result.page_count = cls.page_count
+            self.repo.set_status(doc, "OCR" if cls.pdf_type != "TEXT" else "EXTRACTING")
         result.metrics["pdf_classification"] = time.perf_counter() - t0
-        self.repo.set_status(doc, "OCR" if cls.pdf_type != "TEXT" else "EXTRACTING")
 
         t0 = time.perf_counter()
         pages = self._extract_page_content(doc, result, force)
         result.metrics["text_and_ocr"] = time.perf_counter() - t0
-        result.text_pages = sum(1 for p in pages if p["pdf_type"] == "TEXT")
+        if is_html_path(path):
+            result.page_count = len(pages)
+        result.text_pages = sum(1 for p in pages if p["pdf_type"] in ("TEXT", "TEXT_THIN"))
         result.ocr_pages = sum(1 for p in pages if p["pdf_type"] == "SCANNED")
 
         result.values_meta_pages = pages  # type: ignore[attr-defined]
@@ -235,7 +247,9 @@ class DocumentProcessor:
             year = year_from_text(full_head)
         result.reporting_year = year
 
-        unit_info = self._detect_unit_overall(doc, pages)
+        unit_info = self._detect_unit_overall(
+            doc, pages, getattr(result, "declared_unit", None),
+            getattr(result, "declared_currency", None))
         self._save_raw_pages(doc, pages)
 
         # 4. Extraction: rule-based on tables + AI on relevant pages only
@@ -336,14 +350,24 @@ class DocumentProcessor:
         """Per-page: use text layer when sufficient; OCR only that page otherwise."""
         import pymupdf
 
+        path = resolve_document_path(doc.file_path)
+
+        # An XBRL filing is already text, so it never reaches the PDF machinery:
+        # no pymupdf, no page rasterising, no OCR. OCR exists to recover text
+        # from scanned images, which by definition cannot apply here, and running
+        # it would mean rendering markup as a picture and reading it back.
+        if is_html_path(path):
+            return self._html_pages(doc, path, result)
+
         pages: list[dict] = []
         max_pages = self.cfg.processing.max_pages_per_document
         threshold = self.cfg.processing.text_char_threshold
         ocr_dir = self._ocr_dir(doc)
         cache_dir = self.cfg.data_dir / "cache" / "ocr"
         pdf_hash = doc.file_hash or ""
+        ocr_enabled = self._ocr_enabled()
 
-        with pymupdf.open(str(resolve_document_path(doc.file_path))) as pdf:
+        with pymupdf.open(str(path)) as pdf:
             n = pdf.page_count if max_pages <= 0 else min(pdf.page_count, max_pages)
             for i in range(n):
                 pno = i + 1
@@ -355,6 +379,15 @@ class DocumentProcessor:
                     text = ""
                 if len(text.strip()) >= threshold:
                     pages.append({"page_number": pno, "pdf_type": "TEXT", "text": text})
+                    continue
+                if not ocr_enabled:
+                    # Opted out of OCR. Keep the page rather than dropping it, so
+                    # the document still reports what it does contain.
+                    logger.info("Page %d of %s has a thin text layer and OCR is off",
+                                pno, doc.filename)
+                    result.errors.append(
+                        f"Page {pno}: text layer below threshold and OCR is disabled")
+                    pages.append({"page_number": pno, "pdf_type": "TEXT_THIN", "text": text})
                     continue
                 # Insufficient text layer -> OCR just this page (cached).
                 try:
@@ -387,6 +420,57 @@ class DocumentProcessor:
         return pages
 
     # ------------------------------------------------------------------ #
+    def _ocr_enabled(self) -> bool:
+        """Whether OCR may run at all.
+
+        ``ocr.engine`` was configurable but never consulted, so setting it to
+        ``none`` still invoked Tesseract. The corpus no longer needs OCR, so the
+        setting is now honoured.
+        """
+        return (self.cfg.ocr.engine or "").strip().lower() not in {"none", "off", "disabled", ""}
+
+    # ------------------------------------------------------------------ #
+    def _html_pages(self, doc: Document, path: Path, result: DocumentResult) -> list[dict]:
+        """Turn an XBRL filing folder into the page dicts the rest of the
+        pipeline already consumes."""
+        max_pages = self.cfg.processing.max_pages_per_document
+        preferred = doc.reporting_year or year_from_filename(doc.filename)
+        filing: HtmlDocument = read_document(path, preferred_year=preferred, max_pages=max_pages)
+        result.errors.extend(filing.warnings)
+
+        pages: list[dict] = []
+        tables: dict = {}
+        for index, page in enumerate(filing.pages, start=1):
+            if not page.text.strip():
+                # An empty page would score zero on every downstream test and
+                # only dilute the document's page count.
+                continue
+            pages.append({
+                "page_number": index,
+                "pdf_type": "TEXT",
+                "text": page.text,
+            })
+            if page.table.rows:
+                tables[index] = page.table
+        # Kept on the per-document result, never on self: documents are processed
+        # concurrently through one processor instance.
+        result.html_tables = tables  # type: ignore[attr-defined]
+
+        # The cover states the presentation scale and no statement page repeats
+        # it, so it is captured on the per-document result for unit detection to
+        # use. It must not live on ``self``: documents are processed concurrently
+        # through one processor instance.
+        declared = filing.declared_unit
+        if declared is not None:
+            result.declared_unit = declared  # type: ignore[attr-defined]
+            logger.info("Filing %s declares scale %s (x%s)",
+                        doc.filename, declared[0] or "full amount", declared[1])
+        currency = filing.declared_currency
+        if currency is not None:
+            result.declared_currency = currency  # type: ignore[attr-defined]
+        return pages
+
+    # ------------------------------------------------------------------ #
     def _ocr_dir(self, doc: Document) -> Path:
         slug = re.sub(r"[^\w\-]+", "_", Path(doc.file_path).stem)[:80]
         return self.cfg.data_dir / "ocr" / doc.company[:80] / f"{slug}_{doc.id or ''}"
@@ -395,13 +479,39 @@ class DocumentProcessor:
         slug = re.sub(r"[^\w\-]+", "_", Path(doc.file_path).stem)[:80]
         return self.cfg.data_dir / "extracted" / doc.company[:80] / f"{slug}_{doc.id or ''}"
 
-    def _detect_unit_overall(self, doc: Document, pages: list[dict]) -> UnitInfo:
+    def _detect_unit_overall(self, doc: Document, pages: list[dict],
+                              declared_unit: tuple[str | None, int] | None = None,
+                              declared_currency: str | None = None) -> UnitInfo:
         """Detect the dominant unit from statement pages, else first relevant pages.
 
         Only pages classified as primary statements are trusted first: summary
         and highlights pages often mention narrative amounts ('Rp1.15 trillion
         in 2024') that must not define the statement unit.
+
+        An XBRL cover declares the presentation scale outright ('Level of
+        rounding used in financial statements'), and no statement page repeats
+        it, so when one is declared it is authoritative. Sniffing the statement
+        text for a unit word instead would find nothing, because these filings
+        never restate their own scale -- the figures would then be read as
+        rupiah and every total wrong by 10^3 to 10^6.
         """
+        if declared_unit is not None:
+            unit_name, multiplier = declared_unit
+            logger.info("Using declared scale for %s: %s (x%s), currency %s",
+                        doc.filename, unit_name or "full amount", multiplier,
+                        declared_currency or "unknown")
+            # Currency comes from the cover's own "presentation currency"
+            # declaration. Defaulting it to IDR would be wrong for the groups
+            # that file in USD or SGD, and leaving it unset reported every
+            # Indonesian filing as "Not detected".
+            return UnitInfo(
+                currency=declared_currency,
+                unit=unit_name,
+                multiplier=multiplier,
+                raw_snippet="cover:level-of-rounding",
+                confidence=0.99,
+            )
+
         statement_pages = [p["text"] or "" for p in pages if p.get("section") in STATEMENT_KEYS]
         candidates: list[str] = statement_pages
         if not candidates:
@@ -561,12 +671,21 @@ class DocumentProcessor:
 
         # Tables from text pages (batch to bound memory)
         tables_by_page: dict = {}
-        for chunk_start in range(0, len(text_pages), 20):
-            chunk = text_pages[chunk_start : chunk_start + 20]
-            tables_by_page.update(
-                extract_tables_from_file(
-                    str(resolve_document_path(doc.file_path)), chunk,
-                    preferred_year=doc.reporting_year))
+        cached_tables = getattr(result, "html_tables", None)
+        if cached_tables is not None:
+            # Already parsed while the pages were read. The HTML has to be read
+            # once regardless, and pdfplumber cannot open it, so reusing these
+            # avoids a second full pass over the filing. Restricted to the pages
+            # that survived table_max_pages so the cap still means something.
+            keep = set(text_pages)
+            tables_by_page = {k: v for k, v in cached_tables.items() if k in keep}
+        else:
+            for chunk_start in range(0, len(text_pages), 20):
+                chunk = text_pages[chunk_start : chunk_start + 20]
+                tables_by_page.update(
+                    extract_tables_from_file(
+                        str(resolve_document_path(doc.file_path)), chunk,
+                        preferred_year=doc.reporting_year))
 
         for p in relevant:
             section = p.get("section")

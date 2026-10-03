@@ -105,7 +105,7 @@ class ProcessingConfig:
 
 @dataclass
 class AppConfig:
-    input_directory: Path = PROJECT_ROOT / "LAPORAN KEUANGAN"
+    input_directory: Path = PROJECT_ROOT / "XBRL"
     output_directory: Path = PROJECT_ROOT / "output"
     database_url: str = "sqlite:///./database/processing.db"
     language: str = "id+en"

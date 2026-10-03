@@ -19,9 +19,9 @@
     Two things are never deleted, because losing them is expensive or
     unrecoverable:
 
-      - The input directory (default ./LAPORAN KEUANGAN). Your 359 source PDFs
-        stay untouched. A reset un-registers them from the database, and the
-        next scan re-registers them from their file hashes.
+      - The input directory (default ./XBRL). Your 546 downloaded filing
+        folders stay untouched. A reset un-registers them from the database,
+        and the next scan re-registers them from their file hashes.
       - data/tessdata. Those are the Indonesian/English language packs. Use
         -DeleteTessdata if you really want them gone.
 
@@ -193,7 +193,7 @@ foreach ($t in $targets) {
 Write-Host ("    {0,-26} {1,10} MB  total" -f '', [math]::Round(($total / 1MB), 2)) -ForegroundColor Gray
 Write-Host ''
 
-Write-Keep 'LAPORAN KEUANGAN (input PDFs)'
+Write-Keep 'XBRL (input filings)'
 if (-not $DeleteTessdata) { Write-Keep 'data\tessdata (OCR language packs)' }
 if ($KeepDatabase) { Write-Keep 'database\processing.db (-KeepDatabase)' }
 if ($KeepLogs) { Write-Keep 'logs\ (-KeepLogs)' }

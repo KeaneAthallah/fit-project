@@ -16,6 +16,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.core.config import AppConfig  # noqa: E402
 from app.pipeline.processor import resolve_document_path  # noqa: E402
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 # A path recorded on a DIFFERENT host: the container records /app/..., and this
 # machine's own root is C:\Users\kenn\Documents\Fitri. Neither exists in the
 # tmp_path fixture, which is what makes the re-rooting behaviour observable.
@@ -101,11 +103,19 @@ class TestPathResolution:
         assert resolve_document_path(stored).exists()
 
     def test_real_stored_path_is_used_when_present(self):
-        """On the host that recorded it, the absolute path is authoritative."""
-        real = Path(REAL_WINDOWS)
-        if not real.exists():
-            pytest.skip("document not present on this host")
-        assert resolve_document_path(REAL_WINDOWS) == real
+        """On the host that recorded it, the absolute path is authoritative.
+
+        Uses a real XBRL filing from the current corpus rather than a PDF: this
+        used to reference the deleted PDF corpus and silently skipped itself out
+        of the suite, quietly dropping the coverage.
+        """
+        root = Path(PROJECT_ROOT) / "XBRL"
+        covers = sorted(root.glob("*/20*/1000000.html")) if root.is_dir() else []
+        if not covers:
+            pytest.skip("XBRL corpus not present on this host")
+        real = covers[0]
+        stored = str(real).replace("\\", "/")
+        assert resolve_document_path(stored) == real
 
 
 if __name__ == "__main__":

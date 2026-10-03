@@ -1,7 +1,7 @@
 # Finance Report Extractor - main configuration
 # Values here can be overridden by environment variables (see .env.example)
 
-input_directory: "./LAPORAN KEUANGAN"
+input_directory: "./XBRL"
 output_directory: "./output"
 database_url: "sqlite:///./database/processing.db"
 

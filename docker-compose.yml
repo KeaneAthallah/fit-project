@@ -2,18 +2,18 @@ services:
   app:
     build: .
     volumes:
-      - ./LAPORAN KEUANGAN:/app/LAPORAN KEUANGAN
+      - ./XBRL:/app/XBRL
       - ./output:/app/output
       - ./data:/app/data
       - ./logs:/app/logs
       - ./database:/app/database
     environment:
-      - INPUT_DIRECTORY=/app/LAPORAN KEUANGAN
+      - INPUT_DIRECTORY=/app/XBRL
       - OUTPUT_DIRECTORY=/app/output
       - WORKERS=4
       - OCR_WORKERS=2
     # Full pipeline on the mounted input directory
-    command: python main.py run --input "/app/LAPORAN KEUANGAN"
+    command: python main.py run --input "/app/XBRL"
     env_file:
       - path: .env
         required: false
@@ -23,12 +23,12 @@ services:
     build: .
     profiles: ["sample"]
     volumes:
-      - ./LAPORAN KEUANGAN:/app/LAPORAN KEUANGAN
+      - ./XBRL:/app/XBRL
       - ./output:/app/output
       - ./data:/app/data
       - ./logs:/app/logs
       - ./database:/app/database
-    command: python main.py run --input "/app/LAPORAN KEUANGAN" --limit 5
+    command: python main.py run --input "/app/XBRL" --limit 5
 
   # Optional: web dashboard on http://localhost:8000
   dashboard:

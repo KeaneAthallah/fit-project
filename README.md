@@ -1,21 +1,72 @@
 # Finance Report Extractor
 
-Extract structured financial data from hundreds of Indonesian financial report
-PDFs (text, scanned, or hybrid) and consolidate everything into **one Excel
-workbook** — with full provenance, validation, confidence scoring, and a
-resumable processing database.
+Extract structured financial data from hundreds of Indonesian annual filings
+(inline XBRL, downloaded as HTML by `download-idx-xbrl.ps1`) and consolidate
+everything into **one Excel workbook** — with full provenance, validation,
+confidence scoring, and a resumable processing database.
+
+A PDF path is still supported for scanned filings, but the current corpus is
+XBRL, which is already text and never goes through OCR.
 
 ## What it does
 
 ```text
-SCAN → CLASSIFY PDF (TEXT/SCANNED/HYBRID) → EXTRACT TEXT / OCR
+SCAN → [HTML: read filing folder] / [PDF: CLASSIFY TEXT/SCANNED/HYBRID → TEXT/OCR]
      → CLASSIFY PAGES → TABLE EXTRACTION → NORMALIZE NUMBERS & UNITS
      → RULE-BASED + AI EXTRACTION → VALIDATE (A = L + E, cash flow, …)
      → CONFIDENCE SCORING → REVIEW QUEUE → EXCEL
 ```
 
+## XBRL corpus
+
+Filings live in `XBRL/<company>/<year>/`, where each year folder holds one
+filing: a cover, the primary statements, and (2022+) the notes, as separate HTML
+files.
+
+- **One folder = one document.** The statements only mean anything together,
+  and the cover is the only page that states the presentation scale
+  (`Satuan Penuh` / `Jutaan` / `Ribuan`), which no statement page repeats.
+- **No OCR.** XBRL is text, so it is never rasterised or sent to Tesseract.
+  Rendering markup as an image and reading it back would be pure loss. Set
+  `OCR_ENGINE=none` to disable OCR for the PDF path as well.
+- **Year comes from the folder**, because statement filenames are taxonomy codes
+  (`1321000.html`) and carry no year.
+- **Comparative columns** are kept: `2024 | 2023` becomes one observation per year,
+  matching the PDF behaviour.
+- **Scale and currency are read from the cover, not sniffed.** The cover's
+  "level of rounding" gives the multiplier (333 filings full rupiah, 175
+  millions, 37 thousands) and "presentation currency" gives the ISO code. That
+  second field matters: 17 of the 545 filings (ANJT, FISH, PMMP, MSJA) report in
+  **USD**, so assuming IDR would mislabel them. Neither is stated on any
+  statement page.
+- **Taxonomy variants** are handled by page title, not filename, so the income
+  statement is found whether IDX filed it as `1321000.html` or `1311000.html`.
+- `XBRL` is git-ignored: ~2.5 GB of third-party data across ~11k files.
+  Regenerate with `.\download-idx-xbrl.ps1`.
+
+### Known gap: AMRT 2022 has no filing of its own
+
+`XBRL\AMRT Sumber Alfaria Trijaya Tbk\2022` holds `instance.xbrl` rather than
+HTML, because IDX serves a truncated `inlineXBRL.zip` for it (217,438 bytes with
+no central directory — it is corrupt at the source, not in transit). The
+downloader falls back to `instance.zip`, which is a plain XBRL instance document:
+636 `idx-cor` facts and no HTML table, so the label-based extractor reads nothing
+from it. The scanner is HTML-only and skips that year, giving **545 filings
+instead of 546**.
+
+**No figures are lost.** Every filing carries its prior year as a comparative
+column, so AMRT's 2023 filing supplies 2022 — the identity still closes
+(liabilities 19,275,574 + equity 11,470,692 = total assets 30,746,266) and the
+dashboard reports 2022 in full. The only loss is provenance: those figures are
+attributed to the 2023 document rather than a 2022 one, so per-document
+validation for that year runs against the 2023 filing. Recovering the document
+would mean a separate concept-based XBRL extractor contributing no new values,
+so it is deliberately not implemented.
+
+## Features
+
 - **Indonesian number parsing**: `1.234.567,89`, `(1.500.000)` → `-1500000`, `Rp …`
-- **Unit detection**: `Dalam jutaan Rupiah` → values scaled to full Rupiah (originals preserved)
+- **Unit detection**: `Dalam jutaan Rupiah` → values scaled to full Rupiah (originals preserved). For XBRL the cover's declared scale is authoritative
 - **Multi-year tables**: one row with `2024 | 2023` columns becomes one observation per year
 - **Label mapping (ID + EN)**: `Kas dan Setara Kas`, `Cash and Cash Equivalents`, … → canonical fields
 - **Equity coverage**: `Modal Ditempatkan dan Disetor` → `issued_and_paid_up_capital`, authorized vs issued vs paid-up kept separate, treasury shares split into **quantity / nominal / carrying value / percentage** (a share count is never mistaken for money)
@@ -24,8 +75,8 @@ SCAN → CLASSIFY PDF (TEXT/SCANNED/HYBRID) → EXTRACT TEXT / OCR
 - **Never hallucinate**: unknown values stay `null` and go to the review queue
 - **Resumable**: SQLite tracks every document; restart where you left off
 - **Duplicate detection**: SHA-256 file hashing
-- **Per-page OCR**: each page's text layer is checked — only pages that actually need it are OCR'd (never the whole 200-page report for one scanned page)
-- **Adaptive OCR**: image quality decides whether deskew/denoise/binarize run; clean scans skip the expensive CV; results cached per (PDF hash, page)
+- **Per-page OCR (PDF only)**: each page's text layer is checked — only pages that actually need it are OCR'd (never the whole 200-page report for one scanned page)
+- **Adaptive OCR (PDF only)**: image quality decides whether deskew/denoise/binarize run; clean scans skip the expensive CV; results cached per (PDF hash, page)
 - **Two-stage extraction**: cheap keyword scoring (`financial_page_score`) selects relevant pages *before* any table extraction or AI calls
 - **Consolidated AI**: one structured request per page window (never one request per field); responses cached
 - **Processing modes**: `--mode fast | balanced | accurate` (default balanced)
@@ -38,7 +89,8 @@ SCAN → CLASSIFY PDF (TEXT/SCANNED/HYBRID) → EXTRACT TEXT / OCR
 pip install -r requirements.txt
 ```
 
-For OCR of scanned PDFs, install [Tesseract](https://github.com/tesseract-ocr/tesseract)
+To process the XBRL corpus nothing else is needed. For OCR of scanned PDFs,
+install [Tesseract](https://github.com/tesseract-ocr/tesseract)
 with the Indonesian language pack (`tesseract-ocr-ind`). On Windows the app
 auto-detects `C:\Program Files\Tesseract-OCR\tesseract.exe`, or set
 `TESSERACT_CMD` in `.env`.
@@ -74,26 +126,26 @@ re-enumerated after every single OCR call by every worker, which stalled a
 ## Quick start
 
 ```bash
-# Sample mode: first 5 PDFs only
-python main.py run --input "./laporan keuangan" --limit 5
+# Sample mode: first 5 filings only
+python main.py run --input "./XBRL" --limit 5
 
 # One company first
-python main.py run --input "./laporan keuangan/PT ABC Indonesia"
+python main.py run --input "./XBRL/PT ABC Indonesia"
 
 # Full pipeline: everything
-python main.py run --input "./laporan keuangan"
+python main.py run --input "./XBRL"
 ```
 
 Or step by step:
 
 ```bash
-python main.py scan --input "./laporan keuangan"   # discover PDFs
+python main.py scan --input "./XBRL"        # discover filings
 python main.py process                              # process pending docs
 python main.py export                               # Excel + reports
 python main.py status                               # progress overview
 python main.py inspect laporan_2024.pdf             # per-document detail
 python main.py diagnose path/to/report.pdf          # timing + validation deep-dive
-python main.py run --input "./laporan keuangan" --mode fast   # speed mode
+python main.py run --input "./XBRL" --mode fast   # speed mode
 python main.py retry-failed                         # re-run failures
 python main.py retry-review                         # re-run review queue
 python main.py dashboard                            # web dashboard (port 8000)
@@ -271,7 +323,7 @@ anything is deleted.
 | Sheet | Content |
 |---|---|
 | Summary | One row per company/year with headline figures + confidence |
-| Balance Sheet / Income Statement / Cash Flow / Equity | Field, raw label + raw value, normalized value, currency, unit, page, source-PDF hyperlink, confidence, extraction method |
+| Balance Sheet / Income Statement / Cash Flow / Equity | Field, raw label + raw value, normalized value, currency, unit, page, source-file hyperlink, confidence, extraction method |
 | Raw Data | Every observation incl. raw representations |
 | Validation | Accounting checks with expected/actual/difference/status/severity |
 | Errors | Failed documents + failed checks |
@@ -347,7 +399,7 @@ OCR is I/O bound, and on Windows two things make it far slower than expected:
 
 ### Processing modes
 
-| Mode | OCR | Page filter | AI |
+| Mode | OCR (PDF only) | Page filter | AI |
 |---|---|---|---|
 | `fast` | minimal preprocessing, 200 DPI | aggressive (score >= 5) | minimal tokens |
 | `balanced` (default) | normal | normal (score >= 3) | structured extraction |
@@ -356,7 +408,7 @@ OCR is I/O bound, and on Windows two things make it far slower than expected:
 ## Docker
 
 ```bash
-docker compose run --rm sample                          # 5-PDF smoke test
+docker compose run --rm sample                          # 5-filing smoke test
 docker compose up app                                   # full run
 docker compose --profile dashboard up --build           # web dashboard on :8000
 ```

@@ -12,7 +12,14 @@ review/
 frontend/node_modules/
 frontend/dist/
 
-# Source financial reports (3.3 GB of PDFs). Data, not code: regenerable only by
-# re-obtaining the filings, so back these up separately rather than in git.
+# Source financial reports. The PDF corpus was replaced by the XBRL corpus
+# below and has been deleted; the rules stay so a stray filing dropped back in
+# is still ignored rather than committed.
 LAPORAN KEUANGAN/
 *.pdf
+
+# Inline XBRL filings extracted by download-idx-xbrl.ps1. Same reasoning: bulk
+# third-party data, and ~13k files, so it would swamp a diff. Regenerate with
+# .\download-idx-xbrl.ps1
+XBRL/
+idx-xbrl-report-*.csv

@@ -1,20 +1,21 @@
-"""Legacy Excel workbook generation with openpyxl.
+"""Excel workbook generation with openpyxl.
 
-SUPERSEDED: reports are emitted as CSV by ``app.export.csv_export``. Kept only
-as a fallback and not wired into any command; delete once no downstream process
-consumes the .xlsx.
+Two live entry points:
 
-Sheets:
-
-Sheets:
-    1 Summary, 2 Balance Sheet, 3 Income Statement, 4 Cash Flow, 5 Equity,
-    6 Raw Extracted Data, 7 Validation, 8 Errors, 9 Processing Log.
+* :func:`summary_grid_workbook` builds the Results > Summary grid as workbook
+  bytes for the dashboard's download button.
+* :func:`export_workbook` is the older ten-sheet workbook. SUPERSEDED: the batch
+  reports are emitted as CSV by ``app.export.csv_export``. Kept only as a
+  fallback and not wired into any command; delete once no downstream process
+  consumes the .xlsx.
 """
 from __future__ import annotations
 
 import datetime as dt
+import io
 import json
 from pathlib import Path
+from typing import Any, Sequence
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -32,6 +33,13 @@ HEADER_FILL = PatternFill("solid", fgColor="1F4E78")
 HEADER_FONT = Font(color="FFFFFF", bold=True)
 THIN = Side(style="thin", color="D9D9D9")
 BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+
+# Zebra band and the tint for a row whose figures failed a reconciliation
+# check. Excel has no access to the app's CSS tokens, so these are literal
+# values; they are chosen to sit under the header blue without competing with it
+# and to stay legible when printed in greyscale.
+BAND_FILL = PatternFill("solid", fgColor="F4F7FA")
+WARN_FILL = PatternFill("solid", fgColor="FCE9E9")
 
 # Money format that never rounds. `#,##0` displays 1,286,605,455.80 as
 # 1,286,605,456, silently discarding digits the source actually reported. The
@@ -95,6 +103,190 @@ def _add_table(ws, name: str, ncols: int, nrows: int) -> None:
 
 def _hyperlink_formula(path: str) -> str:
     return f'=HYPERLINK("{path}","{Path(path).name}")'
+
+
+def summary_grid_workbook(
+    rows: Sequence[dict[str, Any]],
+    columns: Sequence[str],
+    labels: dict[str, str],
+    filters: dict[str, Any] | None = None,
+) -> bytes:
+    """The Results > Summary grid, as workbook bytes.
+
+    Built to be handed to somebody else, which drives three choices:
+
+    * Figures are written as numbers, not text, so the recipient can total a
+      column. ``MONEY_FMT`` keeps every digit the source reported.
+    * A figure the pipeline never found stays an empty cell. "The report does
+      not disclose this line" and "it is nil" are different claims, and an empty
+      cell is the only one that does not silently assert the second.
+    * The caveats travel with the data. Currency varies per row, so a column
+      total across rows is not automatically meaningful; and a row whose own
+      arithmetic failed is shaded and named rather than quietly shipped as if it
+      reconciled. The grid shows both of these on screen and an export that
+      dropped them would be less trustworthy than the screen it came from.
+    """
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Summary"
+
+    headings = ["Company", "Year", "Currency"]
+    headings += [labels.get(f, f.replace("_", " ").capitalize()) for f in columns]
+    headings += ["Checks failed", "Source documents"]
+    ws.append(headings)
+
+    warned: set[int] = set()
+    for r, row in enumerate(rows, start=2):
+        failed = sorted(row.get("failed_checks") or {})
+        # Provenance: which PDFs the row's figures came from, so a recipient who
+        # disputes a number can go and read it. Falls back to the id when a
+        # document has no filename on disk.
+        sources = sorted(
+            {
+                (d.get("filename") or f"document {d.get('id')}")
+                for d in (row.get("documents") or [])
+            }
+        )
+        figures = []
+        for field in columns:
+            cell = (row.get("cells") or {}).get(field)
+            figures.append(
+                cell.get("normalized_value") if isinstance(cell, dict) else None
+            )
+        ws.append([
+            row.get("company"),
+            row.get("year"),
+            row.get("currency"),
+            *figures,
+            ", ".join(failed),
+            ", ".join(sources),
+        ])
+        if failed:
+            warned.add(r)
+
+    ncols = len(headings)
+    nrows = len(rows)
+    first_figure, last_figure = 4, 3 + len(columns)
+
+    for c in range(1, ncols + 1):
+        cell = ws.cell(row=1, column=c)
+        cell.fill = HEADER_FILL
+        cell.font = HEADER_FONT
+        cell.border = BORDER
+        cell.alignment = Alignment(
+            horizontal="right" if first_figure <= c <= last_figure else "left",
+            vertical="center",
+            wrap_text=True,
+        )
+    ws.row_dimensions[1].height = 30
+
+    for r in range(2, nrows + 2):
+        # A failed check tints the whole row, because it is a property of the row
+        # and a single tinted cell reads as a typo. Otherwise alternate, so a
+        # figure can be traced back to its company across eight columns.
+        band = WARN_FILL if r in warned else (BAND_FILL if r % 2 == 0 else None)
+        for c in range(1, ncols + 1):
+            cell = ws.cell(row=r, column=c)
+            cell.border = BORDER
+            if band is not None:
+                cell.fill = band
+            if first_figure <= c <= last_figure:
+                cell.number_format = MONEY_FMT
+                cell.alignment = Alignment(horizontal="right")
+            elif c == 2:
+                cell.alignment = Alignment(horizontal="center")
+
+    # Freeze the header row and the three identity columns: the figure columns
+    # are the ones that scroll away, and a number with no company beside it is
+    # not readable.
+    ws.freeze_panes = ws.cell(row=2, column=min(first_figure, ncols))
+
+    if nrows > 0:
+        ws.auto_filter.ref = f"A1:{get_column_letter(ncols)}{nrows + 1}"
+
+    _set_widths(ws, [38, 8, 14] + [20] * len(columns) + [26, 44])
+
+    _notes_sheet(wb, rows=rows, columns=columns, filters=filters or {})
+    return _to_bytes(wb)
+
+
+def _notes_sheet(
+    wb: Workbook, *, rows: Sequence[dict[str, Any]], columns: Sequence[str],
+    filters: dict[str, Any],
+) -> None:
+    """The caveats, on their own sheet.
+
+    Kept off the data sheet because a note row above the header would break the
+    autofilter and a cell comment is too easy to miss. This is read once, by
+    whoever opens the file.
+    """
+    ws = wb.create_sheet("Notes")
+    ws.column_dimensions["A"].width = 26
+    ws.column_dimensions["B"].width = 96
+    bold = Font(bold=True)
+
+    def put(label: str, text: str) -> None:
+        ws.append([label, text])
+        ws.cell(row=ws.max_row, column=1).font = bold
+        ws.cell(row=ws.max_row, column=2).alignment = Alignment(wrap_text=True)
+
+    put("Generated", dt.datetime.now().strftime("%Y-%m-%d %H:%M"))
+    put(
+        "Contents",
+        f"{len(rows)} company-year "
+        f"{'row' if len(rows) == 1 else 'rows'}, {len(columns)} "
+        f"{'figure' if len(columns) == 1 else 'figures'}.",
+    )
+
+    ws.append([])
+    ws.append(["How to read this file"])
+    ws.cell(row=ws.max_row, column=1).font = bold
+    put(
+        "Blank figure",
+        "The pipeline found no such line in any report for that company-year. "
+        "It is not zero, and it should not be totalled as zero.",
+    )
+    put(
+        "Currency",
+        "Amounts are in each row's own currency, shown in the Currency column. "
+        "A column total is only meaningful across rows that share a currency.",
+    )
+    put(
+        "'Not detected'",
+        "No currency was found in the source for those figures. This is not the "
+        "same as Indonesian rupiah.",
+    )
+    put(
+        "'Mixed'",
+        "The figures in that row disagree about currency, or mix a detected code "
+        "with an undetected one. Check before using the row.",
+    )
+    put(
+        "Checks failed",
+        "Reconciliation checks the pipeline ran that did not hold for that "
+        "company-year. Those rows are shaded. The figures are still shown; they "
+        "are just known not to add up.",
+    )
+    put(
+        "Source documents",
+        "The reports the figures in that row were extracted from.",
+    )
+
+    ws.append([])
+    ws.append(["Filters applied at export"])
+    ws.cell(row=ws.max_row, column=1).font = bold
+    applied = {k: v for k, v in filters.items() if v not in (None, "")}
+    if applied:
+        for key, value in applied.items():
+            put(str(key).replace("_", " ").capitalize(), str(value))
+    else:
+        put("None", "Every company, year and currency was included.")
+
+
+def _to_bytes(wb: Workbook) -> bytes:
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
 
 
 def export_workbook(cfg: AppConfig, out_path: Path | None = None) -> Path:

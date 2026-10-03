@@ -281,6 +281,33 @@ export function Button({
   )
 }
 
+/**
+ * A link that looks like a Button. For downloads, which must stay real links:
+ * the browser then owns the transfer, so the filename comes from the response
+ * headers, the user can middle-click or "save as", and a large file does not
+ * depend on a fetch resolving first. Styling is shared with Button rather than
+ * repeated, so the two cannot drift apart.
+ */
+export function ButtonLink({
+  variant = 'secondary',
+  size = 'md',
+  children,
+  className = '',
+  ...rest
+}: {
+  variant?: ButtonVariant
+  size?: ButtonSize
+} & React.AnchorHTMLAttributes<HTMLAnchorElement>) {
+  return (
+    <a
+      className={`inline-flex max-w-full shrink-0 items-center justify-center rounded-md font-medium transition-colors aria-disabled:pointer-events-none aria-disabled:opacity-50 ${BUTTON_VARIANTS[variant]} ${BUTTON_SIZES[size]} ${className}`}
+      {...rest}
+    >
+      <span className="min-w-0 truncate">{children}</span>
+    </a>
+  )
+}
+
 const FIELD_BASE =
   'w-full min-w-0 rounded-md border border-input bg-card text-foreground placeholder:text-muted-foreground transition-colors hover:border-ring/60 focus:border-ring disabled:opacity-50'
 

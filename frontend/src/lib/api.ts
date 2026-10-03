@@ -99,10 +99,18 @@ export const api = {
   valueFacets: () => request<ValueFacets>('/values/facets'),
 
   /** The results grid: one row per company-year, one column per extracted
-   *  field. `fields` narrows the columns; by default every field the scan
-   *  produced is shown. */
+   *  field. `fields` narrows the columns; by default only the headline figures
+   *  are shown, in the server's reading order. */
   resultsSummary: (params: Record<string, string | number | null>) =>
     request<ResultsSummary>(`/results/summary${qs(params)}`),
+
+  /** The same grid as a downloadable .xlsx, filtered the same way but
+   *  deliberately unpaginated: a file holding only the visible page would be
+   *  worse than no file at all. A URL rather than a promise, because the
+   *  browser performs the download -- `request()` is JSON-only. Filters are
+   *  passed, `page`/`page_size` deliberately are not. */
+  summaryExportUrl: (params: Record<string, string | number | null>) =>
+    `${BASE}/results/summary/export${qs(params)}`,
 
   /** Which discovered reports have produced values yet. Makes the gap between
    *  "no data" and "not read yet" visible instead of silently omitting rows. */

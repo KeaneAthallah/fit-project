@@ -16,8 +16,11 @@ matters for correctness:
   a hand correction first, then the extractor's own confidence, then the
   lowest id as a stable tie-break.
 """
+import io
+
 import pytest
 from fastapi.testclient import TestClient
+from openpyxl import Workbook, load_workbook
 
 from app.core.config import get_config, load_config, set_config
 from app.dashboard.server import create_app
@@ -161,26 +164,34 @@ def test_one_row_per_company_year(client):
     assert body["pagination"]["total"] == 5
 
 
-def test_default_columns_are_everything_the_scan_produced(client):
-    """Nothing extracted is hidden by default.
+def test_default_columns_are_the_headline_figures_in_reading_order(client):
+    """The grid opens on the figures a reader works down, and nothing else.
 
-    A fixed column list would silently drop whatever the pipeline found that
-    nobody thought to include, which for a report reader is the whole point.
-    The headline figures lead; everything else follows.
+    A fixed list is the point: the same eight columns for every company, so two
+    rows are comparable at a glance. A headline figure no report in view
+    contained is dropped rather than shown as a column of em dashes, and a
+    figure outside the list is reached through ?fields= or the exports.
     """
     body = _rows(client)
-    present = {
-        "total_assets", "total_equity", "revenue", "sales", "net_income",
-        "finance_costs",
-    }
-    assert set(body["fields"]) == present
-    # Headline first, in their canonical order, then the remainder.
-    assert body["fields"][:3] == ["total_assets", "revenue", "sales"]
-    assert body["fields"][-1] == "finance_costs"
+    assert body["fields"] == [
+        "total_assets",
+        "total_equity",
+        "revenue",
+        "sales",
+        "net_income",
+    ]
 
     # Labels travel with the response so header text has one source of truth.
     assert body["labels"]["total_assets"] == "Total assets"
     assert body["labels"]["net_income"] == "Profit for the year"
+
+
+def test_a_field_outside_the_headline_list_is_not_a_default_column(client):
+    """finance_costs was extracted and is real. It is still not the summary."""
+    body = _rows(client)
+    assert "finance_costs" not in body["fields"]
+    # It is one `?fields=` away, not gone.
+    assert _rows(client, fields="finance_costs")["fields"] == ["finance_costs"]
 
 
 def test_a_field_that_was_never_extracted_gets_no_column(client):
@@ -189,10 +200,11 @@ def test_a_field_that_was_never_extracted_gets_no_column(client):
     assert "treasury_shares_carrying_value" not in body["fields"]
 
 
-def test_columns_can_still_be_narrowed_to_headline_figures(client):
-    headline = "total_assets,revenue,sales,profit_before_tax,net_income,total_equity,income_tax"
-    body = _rows(client, fields=headline)
-    assert body["fields"] == headline.split(",")
+def test_columns_can_still_be_widened_past_the_headline_figures(client):
+    """The default list is a default, not a ceiling."""
+    extra = "gross_profit,finance_costs"
+    body = _rows(client, fields=extra)
+    assert body["fields"] == extra.split(",")
 
 
 def test_custom_fields_are_returned_in_the_requested_order(client):
@@ -697,3 +709,133 @@ class TestDisputedFigures:
         assert "disputed" not in cell
         assert cell["normalized_value"] == 17_527_130_084.0
         assert wrong.id != cell["id"]
+
+
+# --------------------------------------------------------------------------
+# the Excel export
+#
+# The download is the grid in a different shape, so the risk is not that it is
+# wrong but that it is a *different* answer: a page-limited file, a filter
+# quietly dropped, a missing figure written as zero. Each test pins one of those.
+
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _workbook(response) -> Workbook:
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"] == XLSX_MIME
+    # The browser has to save this rather than try to render it.
+    disposition = response.headers["content-disposition"]
+    assert disposition.startswith("attachment;")
+    assert ".xlsx" in disposition
+    return load_workbook(io.BytesIO(response.content))
+
+
+def _export(client, **params):
+    return client.get("/api/results/summary/export", params=params)
+
+
+def _sheet_rows(ws):
+    return list(ws.iter_rows(min_row=2, values_only=True))
+
+
+class TestExcelExport:
+    def test_it_is_a_workbook_with_the_grid_as_its_first_sheet(self, client):
+        wb = _workbook(_export(client))
+        assert wb.sheetnames[0] == "Summary"
+        head = [c.value for c in wb["Summary"][1]]
+        assert head[:3] == ["Company", "Year", "Currency"]
+        assert head[3:5] == ["Total assets", "Total equity"]
+        assert head[-2:] == ["Checks failed", "Source documents"]
+
+    def test_figures_are_numbers_so_the_recipient_can_total_them(self, client):
+        """Text figures cannot be summed, which is the main reason to ask for a
+        workbook rather than a picture of the grid."""
+        row = next(r for r in _sheet_rows(_workbook(_export(client))["Summary"])
+                   if r[0] == "PT AAA Tbk")
+        assert row[3] == 1_000_000.0
+        assert isinstance(row[3], (int, float))
+
+    def test_an_absent_figure_stays_empty_rather_than_becoming_zero(self, client):
+        """A blank means "no report disclosed this line", which is a different
+        claim from nil. A 0 in that cell would be a figure nobody reported."""
+        row = next(r for r in _sheet_rows(_workbook(_export(client))["Summary"])
+                   if r[0] == "PT CCC Tbk")
+        assert row[0] == "PT CCC Tbk"
+        assert row[3] is None, "CCC has sales but no total_assets"
+
+    def test_it_covers_every_row_not_just_the_visible_page(self, client, tmp_path):
+        """The grid pages at 50. An export that inherited the page size would
+        silently drop everything past it, which is the worst way for a download
+        to be wrong: it looks complete."""
+        Session = get_session_factory(
+            get_engine(client.app.dependency_overrides[get_config]())
+        )
+        with Session() as s:
+            repo = Repository(s)
+            doc, _ = repo.upsert_document(
+                str(tmp_path / "many.pdf"), "hash-many", "PT MANY Tbk", "many.pdf"
+            )
+            repo.replace_values(doc, [
+                # Distinct years, so these are 60 rows rather than 60 readings of
+                # one figure.
+                _value(repo, doc, "total_assets", 1_000.0 + i, year=1980 + i)
+                for i in range(60)
+            ])
+
+        grid = _rows(client, page_size=50)
+        assert grid["pagination"]["total"] == 65
+        assert len(grid["items"]) == 50, "the fixture alone must exceed one page"
+
+        ws = _workbook(_export(client))["Summary"]
+        assert ws.max_row == 66  # header + every row
+
+    def test_it_honours_the_filters_the_screen_is_showing(self, client):
+        """Otherwise the file and the table answer two different questions."""
+        companies = {
+            r[0] for r in _sheet_rows(
+                _workbook(_export(client, company="PT BBB"))["Summary"]
+            )
+        }
+        assert companies == {"PT BBB Tbk"}
+
+        years = [
+            r[1] for r in _sheet_rows(_workbook(_export(client, year=2023))["Summary"])
+        ]
+        assert years == [2023]
+
+    def test_the_currency_filter_narrows_the_file_too(self, client):
+        rows = _sheet_rows(_workbook(_export(client, currency="USD"))["Summary"])
+        assert [r[0] for r in rows] == ["PT BBB Tbk"]
+        # total_assets on that row is undetected, so USD filtering must leave it
+        # empty rather than reporting it under the wrong currency.
+        assert rows[0][3] is None
+        assert rows[0][7] == 120_000.0
+
+    def test_it_carries_the_same_columns_as_the_grid(self, client):
+        """A file whose columns differ from the screen cannot be read against it."""
+        grid = _rows(client)
+        head = [c.value for c in _workbook(_export(client))["Summary"][1]]
+        assert head[3:-2] == [grid["labels"][f] for f in grid["fields"]]
+
+    def test_a_row_whose_figures_do_not_reconcile_says_so_in_the_file(self, client):
+        """The grid badges this row. An export that dropped the warning would be
+        more dangerous than the screen, because it travels further."""
+        row = next(r for r in _sheet_rows(_workbook(_export(client))["Summary"])
+                   if r[0] == "PT AAA Tbk")
+        assert "assets_equals_liabilities_plus_equity" in row[-2]
+
+    def test_it_records_the_filters_it_was_taken_under(self, client):
+        """A file with no note of what it was narrowed to cannot be checked
+        against the screen it came from."""
+        notes = _workbook(_export(client, company="PT BBB"))["Notes"]
+        text = "\n".join(str(c.value) for r in notes.iter_rows() for c in r if c.value)
+        assert "PT BBB" in text
+        assert "Blank figure" in text, "the caveats must travel with the data"
+
+    def test_an_empty_result_is_still_a_valid_workbook(self, client):
+        """No rows must not mean a 500: a download that fails on an empty filter
+        is indistinguishable from a broken button."""
+        ws = _workbook(_export(client, company="PT NOPE"))["Summary"]
+        assert [c.value for c in ws[1]][:3] == ["Company", "Year", "Currency"]
+        assert ws.max_row == 1

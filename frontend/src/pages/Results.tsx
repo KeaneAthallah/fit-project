@@ -20,6 +20,7 @@ import {
   Alert,
   Badge,
   Button,
+  ButtonLink,
   Card,
   EmptyState,
   ErrorBanner,
@@ -226,6 +227,7 @@ function GridCell({
   company,
   year,
   canAdd,
+  className = '',
   onEdit,
   onAdd,
 }: {
@@ -234,21 +236,24 @@ function GridCell({
   company: string
   year: number | null
   canAdd: boolean
+  className?: string
   onEdit: () => void
   onAdd: () => void
 }) {
   const where = `${label} for ${company}${year ? ` ${year}` : ''}`
+  // Figures never wrap: a broken amount is read as a different amount.
+  const base = `whitespace-nowrap ${className}`
 
   if (!cell) {
     if (!canAdd) {
       return (
-        <Td align="right" className="tnum text-muted-foreground/40" title={`No ${label} was found`}>
+        <Td align="right" className={`tnum text-muted-foreground/40 ${base}`} title={`No ${label} was found`}>
           &mdash;
         </Td>
       )
     }
     return (
-      <Td align="right">
+      <Td align="right" className={base}>
         <button
           type="button"
           onClick={onAdd}
@@ -267,30 +272,34 @@ function GridCell({
     )
   }
   return (
-    <Td align="right">
+    <Td align="right" className={base}>
       <button
         type="button"
         onClick={onEdit}
         title={`Edit ${where}`}
+        aria-label={`Edit ${where}`}
         className="tnum -mr-1 inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 font-mono text-sm font-semibold text-foreground hover:bg-accent hover:text-primary"
       >
         {rupiah(cell.normalized_value)}
         {cell.is_edited && (
-          <span className="text-[0.6rem] font-sans font-semibold uppercase tracking-wide text-accent-foreground">
+          <span className="rounded bg-accent px-1 text-[0.6rem] font-sans font-semibold uppercase tracking-wide text-accent-foreground">
             edited
           </span>
         )}
         {cell.disputed && (
           <span
-            className="rounded bg-red-100 px-1 text-[0.6rem] font-sans font-bold uppercase tracking-wide text-red-800"
+            className="rounded bg-danger-soft px-1 text-[0.6rem] font-sans font-bold uppercase tracking-wide text-danger-soft-foreground"
             title="Two readings of this figure disagree. Click to compare them."
           >
             disputed
           </span>
         )}
+        {/* The pencil is a hover affordance, not a permanent fixture: one per
+            cell across every column turns a table of numbers into a field of
+            icons. Keyboard focus still reveals it. */}
         <svg
           viewBox="0 0 24 24"
-          className="h-3 w-3 shrink-0 text-muted-foreground"
+          className="h-3 w-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
           fill="none"
           stroke="currentColor"
           strokeWidth="2"
@@ -926,6 +935,55 @@ function LiveProcessingBanner({
   )
 }
 
+/**
+ * Download the grid as a workbook.
+ *
+ * A real link rather than a fetch-then-save: the browser owns the transfer, so
+ * the filename comes from the response headers and a large export never depends
+ * on a JS blob resolving first. The on-screen filters travel with it so the file
+ * answers the question the table is answering; the page number deliberately does
+ * not, because a download containing only the visible page is quietly wrong.
+ */
+function SummaryExport({
+  params,
+  rowCount,
+}: {
+  params: Record<string, string>
+  rowCount: number
+}) {
+  const empty = rowCount === 0
+  return (
+    <ButtonLink
+      // An anchor with no href is not focusable and cannot be activated, which
+      // is what "disabled" has to mean for something styled as a button.
+      href={empty ? undefined : api.summaryExportUrl(params)}
+      variant="secondary"
+      aria-disabled={empty || undefined}
+      title={
+        empty
+          ? 'Nothing to export: no company-years match the current filters.'
+          : `Download all ${num(rowCount)} rows as an .xlsx, every page, with a sheet explaining the blanks and the currencies`
+      }
+    >
+      <svg
+        viewBox="0 0 24 24"
+        className="h-4 w-4 shrink-0"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        aria-hidden
+      >
+        <path
+          d="M12 3v11m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+      Export to Excel
+    </ButtonLink>
+  )
+}
+
 function SummaryGrid({
   companies,
   globalCurrencies,
@@ -974,6 +1032,15 @@ function SummaryGrid({
       }),
     [values.company, values.year, values.currency, page],
   )
+
+  // The export takes the same filters as the grid, and not the page number: a
+  // file that held only the rows on screen would be indistinguishable from the
+  // whole answer unless the reader already knew to check.
+  const exportParams = {
+    company: values.company,
+    year: values.year,
+    currency: values.currency,
+  }
 
   // The grid is the thing being built by a batch, so it polls while one runs.
   // Batch status comes from the app-wide context rather than a second poller of
@@ -1051,23 +1118,56 @@ function SummaryGrid({
             hint="Adjust the filters, or process more documents from the dashboard."
           />
         ) : (
-          <Card padded={false}>
+          <Card
+            padded={false}
+            subtitle={
+              data
+                ? `${num(data.pagination.total)} company-year${
+                    data.pagination.total === 1 ? '' : 's'
+                  } · ${data.fields.length} figure${data.fields.length === 1 ? '' : 's'}${
+                    data.pagination.pages > 1
+                      ? ` · page ${data.pagination.page} of ${data.pagination.pages}`
+                      : ''
+                  }`
+                : undefined
+            }
+            actions={
+              <SummaryExport
+                params={exportParams}
+                rowCount={data?.pagination.total ?? 0}
+              />
+            }
+          >
             <Table caption="Results summary by company and year" stickyHeader>
               <thead>
                 <tr>
-                  <Th>Company</Th>
+                  {/* Pinned: the figure columns are what scroll off, and a
+                      number with no company beside it cannot be read. The
+                      background is restated because a sticky cell is lifted out
+                      of the row's own background. */}
+                  <Th className="sticky left-0 z-20 bg-muted">Company</Th>
                   <Th>Year</Th>
                   <Th hideBelow="lg">Currency</Th>
-                  {data.fields.map((field) => (
-                    <Th key={field} align="right">
+                  {data.fields.map((field, i) => (
+                    <Th
+                      key={field}
+                      align="right"
+                      // A rule between "who" and "how much", so the eye finds the
+                      // edge of the identity block on a wide table.
+                      className={i === 0 ? 'border-l border-border' : ''}
+                    >
                       {data.labels[field] ?? titleCase(field)}
                     </Th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {data.items.map((row) => {
+                {data.items.map((row, index) => {
                   const rowKey = `${row.company}-${row.year}`
+                  // Alternating bands. Keyed to the row's position rather than
+                  // an nth-child rule, because a row expands into extra <tr>s
+                  // and CSS would start the striping mid-group.
+                  const banded = index % 2 === 1
                   // `documents` is only present on a current backend; defaulting
                   // keeps the grid usable rather than throwing on an older one.
                   const rowDocuments = row.documents ?? []
@@ -1087,8 +1187,19 @@ function SummaryGrid({
 
                   return (
                     <Fragment key={rowKey}>
-                      <tr className="transition-colors hover:bg-accent/40">
-                        <Td className="max-w-56 text-xs">
+                      <tr
+                        className={`group transition-colors hover:bg-accent/40 ${
+                          banded ? 'bg-muted/30' : ''
+                        }`}
+                      >
+                        {/* Sticky for the same reason as its header, and given
+                            the band's own background so figures scrolling
+                            underneath do not show through it. */}
+                        <Td
+                          className={`sticky left-0 z-10 max-w-56 border-r text-xs group-hover:bg-accent/40 ${
+                            banded ? 'bg-muted/95' : 'bg-card'
+                          }`}
+                        >
                           <div className="flex items-start gap-1">
                             <button
                               type="button"
@@ -1146,7 +1257,7 @@ function SummaryGrid({
                             </span>
                           )}
                         </Td>
-                        {data.fields.map((field) => {
+                        {data.fields.map((field, i) => {
                           const cell = row.cells[field] ?? null
                           return (
                             <GridCell
@@ -1156,6 +1267,7 @@ function SummaryGrid({
                               company={row.company}
                               year={row.year}
                               canAdd={rowDocuments.length > 0}
+                              className={i === 0 ? 'border-l border-border' : ''}
                               onEdit={() =>
                                 setActiveCell({
                                   row: rowKey,

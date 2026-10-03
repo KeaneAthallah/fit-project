@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from app.core.config import AppConfig, get_config
 from app.financial.mappings import FIELD_LABELS
@@ -84,23 +84,20 @@ FIELD_TITLES: dict[str, str] = {
     "non_controlling_interest": "Non-controlling interest",
 }
 
-# The figures a reader opens the report for, in reading order. Columns the scan
-# produced that are not here follow, sorted, so nothing is hidden by default.
+# The summary grid, in the order a reader works down it: what the company owns,
+# then what it is worth, then the year's trading result, then tax. A figure the
+# scan did not extract for a given company simply gets no column rather than a
+# column of em dashes, and anything outside this list is reachable through
+# ?fields= or the exports, not the default view.
 HEADLINE_FIELDS: tuple[str, ...] = (
     "total_assets",
+    "total_equity",
+    "additional_paid_in_capital",
     "revenue",
     "sales",
     "profit_before_tax",
     "net_income",
-    "total_equity",
     "income_tax",
-    "gross_profit",
-    "operating_income",
-    "total_liabilities",
-    "cash_flow_operating",
-    "cash_flow_investing",
-    "cash_flow_financing",
-    "ending_cash_balance",
 )
 
 ALL_FIELDS: frozenset[str] = frozenset(
@@ -351,11 +348,10 @@ def _resolve_fields(raw: str | None, present: Iterable[str]) -> list[str]:
         # Requested order is honoured, duplicates dropped.
         seen: set[str] = set()
         return [f for f in wanted if not (f in seen or seen.add(f))]
-    # No usable preference: headline figures in reading order, then the rest
-    # sorted, so nothing the scan produced is hidden by default.
-    headline = [f for f in HEADLINE_FIELDS if f in have]
-    rest = sorted(f for f in have if f not in HEADLINE_FIELDS)
-    return headline + rest
+    # No usable preference: the headline figures in their canonical order. Only
+    # the ones this scope actually has, so the grid never opens on a wall of
+    # em dashes for figures no report in view contained.
+    return [f for f in HEADLINE_FIELDS if f in have]
 
 
 # --------------------------------------------------------------------------
@@ -983,16 +979,21 @@ def create_value(
 # the results grid
 # --------------------------------------------------------------------------
 
-@router.get("/results/summary")
-def results_summary(
-    cfg: AppConfig = Cfg,
-    fields: str | None = None,
-    company: str | None = None,
-    year: int | None = None,
-    currency: str | None = None,
-    page: int = Query(1, ge=1),
-    page_size: int = Query(25, ge=1, le=500),
-) -> dict[str, Any]:
+def _summary_scope(
+    cfg: AppConfig,
+    *,
+    fields: str | None,
+    company: str | None,
+    year: int | None,
+    currency: str | None,
+) -> tuple[list[dict[str, Any]], list[str], dict[str, str], list[dict[str, int]]]:
+    """Every summary row the filters admit, plus its columns and labels.
+
+    The grid and the Excel export both start here, so a downloaded workbook is
+    the table on screen rather than a second and slightly different answer to the
+    same question. Pagination is left to the caller: a download that quietly
+    contained only the visible page would be worse than no download at all.
+    """
     Session = get_session_factory(get_engine(cfg))
     with Session() as s:
         repo = Repository(s)
@@ -1080,15 +1081,69 @@ def results_summary(
 
     rows.sort(key=lambda r: (r["company"].lower(),
                              (1, 0) if r["year"] is None else (0, -r["year"])))
-    total = len(rows)
+    labels = {f: FIELD_TITLES.get(f, f.replace("_", " ").capitalize())
+              for f in columns}
+    return rows, columns, labels, currencies
+
+
+@router.get("/results/summary")
+def results_summary(
+    cfg: AppConfig = Cfg,
+    fields: str | None = None,
+    company: str | None = None,
+    year: int | None = None,
+    currency: str | None = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=500),
+) -> dict[str, Any]:
+    rows, columns, labels, currencies = _summary_scope(
+        cfg, fields=fields, company=company, year=year, currency=currency
+    )
     return {
         "items": _page_of(rows, page, page_size),
         "fields": columns,
-        "labels": {f: FIELD_TITLES.get(f, f.replace("_", " ").capitalize())
-                   for f in columns},
+        "labels": labels,
         "currencies": currencies,
-        "pagination": _pagination(total, page, page_size),
+        "pagination": _pagination(len(rows), page, page_size),
     }
+
+
+@router.get("/results/summary/export")
+def results_summary_export(
+    cfg: AppConfig = Cfg,
+    fields: str | None = None,
+    company: str | None = None,
+    year: int | None = None,
+    currency: str | None = None,
+) -> Response:
+    """The summary grid as a workbook, filtered exactly as the screen is.
+
+    Same scoping as ``/results/summary`` and deliberately unpaginated: the point
+    of an export is the whole answer. Built in memory and streamed back, so
+    nothing is written to the output directory to be cleaned up later, and no
+    filename is taken from the request.
+    """
+    from app.export.excel import summary_grid_workbook
+
+    rows, columns, labels, _ = _summary_scope(
+        cfg, fields=fields, company=company, year=year, currency=currency
+    )
+    # The filters go into the workbook too: a file with no record of what it
+    # was narrowed to cannot be checked against the screen it came from.
+    applied = {k: v for k, v in
+               (("company", company), ("year", year), ("currency", currency))
+               if v not in (None, "")}
+    body = summary_grid_workbook(rows, columns, labels, applied)
+    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M")
+    return Response(
+        content=body,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        headers={
+            "Content-Disposition": f'attachment; filename="results-summary-{stamp}.xlsx"'
+        },
+    )
 
 
 @router.get("/results/coverage")

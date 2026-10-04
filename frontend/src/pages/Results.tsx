@@ -33,13 +33,13 @@ import {
   Th,
 } from '../components/ui'
 
-const FILTER_KEYS = ['company', 'year', 'currency', 'page'] as const
+const FILTER_KEYS = ['company', 'year', 'currency', 'subsector', 'page'] as const
 
 // The keys that are genuinely filters. `page` is pagination rather than a
 // filter, so counting it would tell the reader they have a filter applied when
 // they have not, and "Clear N filters" would throw away their place in the
 // results along with the filters.
-const CLEARABLE_KEYS = ['company', 'year', 'currency'] as const
+const CLEARABLE_KEYS = ['company', 'year', 'currency', 'subsector'] as const
 
 const PAGE_SIZE = 50
 
@@ -850,12 +850,14 @@ function SummaryGrid({
   setParam,
   values,
   years,
+  subsectors,
 }: {
   companies: { company: string }[]
   globalCurrencies: { currency: string; count: number }[] | undefined
   setParam: (key: string, value: string) => void
   values: Record<string, string>
   years: string[]
+  subsectors?: { subsector: string; count: number }[] | undefined
 }) {
   const page = Number(values.page || '1')
   // Which grid cell is open for editing, if any. Both states live here so only
@@ -948,6 +950,21 @@ function SummaryGrid({
           value={values.currency}
           onChange={(e) => setParam('currency', e.target.value)}
         />
+        {(subsectors ?? []).map((s) => (
+          <Select
+            key={s.subsector}
+            label="Sub-sector"
+            options={[
+              { value: '', label: 'All sub-sectors' },
+              { value: 'none', label: 'No sub-sector declared', count: s.count },
+              ...s.count > 0
+                ? []
+                : [{ value: s.subsector, label: s.subsector, count: s.count }]
+            ]}
+            value={values.subsector}
+            onChange={(e) => setParam('subsector', e.target.value)}
+          />
+        ))}
       </div>
 
       {summary.error && (
@@ -999,6 +1016,7 @@ function SummaryGrid({
                   <Th className="sticky left-0 z-20 bg-muted">Company</Th>
                   <Th>Year</Th>
                   <Th hideBelow="lg">Currency</Th>
+                  <Th>Sub-sector</Th>
                   {data.fields.map((field, i) => (
                     <Th
                       key={field}
@@ -1107,6 +1125,15 @@ function SummaryGrid({
                               {currencyLabel(row.currency)}
                             </span>
                           )}
+                        </Td>
+                        {/* The declared sub-sector is a sentence, not a figure, so
+                            it gets its own thin column: a reader glancing at a
+                            row can see at a glance which business the numbers
+                            belong to. */}
+                        <Td hideBelow="lg" className="text-xs">
+                          <span className="text-muted-foreground">
+                            {row.subsector ?? "—"}
+                          </span>
                         </Td>
                         {data.fields.map((field, i) => {
                           const cell = row.cells[field] ?? null
@@ -1244,6 +1271,7 @@ export default function Results() {
         setParam={setParam}
         values={values}
         years={(facets.data?.years ?? []).map(String)}
+        subsectors={facets.data?.subsectors}
       />
     </>
   )

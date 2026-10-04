@@ -1405,6 +1405,121 @@ def dashboard_summary(cfg: AppConfig = Cfg) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------
+# financial pulse -- corpus-level aggregates for the home dashboard
+# --------------------------------------------------------------------------
+
+# The rankings the "Gambaran Keuangan" section leads with, chosen from the
+# nine indicators the product is organized around: the figures a reader
+# actually ranks companies by.
+FINANCIAL_LEADER_FIELDS: tuple[str, ...] = (
+    "total_assets",
+    "sales_and_revenue",
+    "total_equity",
+    "total_profit_loss",
+)
+
+# Every indicator the nine-indicator layout shows, for the coverage chips:
+# "how many companies actually report this".
+FINANCIAL_COVERAGE_FIELDS: tuple[str, ...] = (
+    "total_assets",
+    "equity_attributable_to_owners_of_parent",
+    "non_controlling_interest",
+    "total_equity",
+    "sales_and_revenue",
+    "total_profit_loss_before_tax",
+    "total_profit_loss",
+    "net_income",
+    "income_tax_paid_operating",
+)
+
+
+@router.get("/summary/financials")
+def financial_pulse(cfg: AppConfig = Cfg) -> dict[str, Any]:
+    """What the corpus holds financially, across every company.
+
+    The results grid answers "how do these rows compare" and /summary
+    counts documents; neither answers "which companies are largest, who
+    earns most, what is covered" -- the question the home dashboard leads
+    with. The aggregates are computed here in one pass, reusing the
+    grid's winner rules, so a leader here can never disagree with the
+    grid.
+    """
+    Session = get_session_factory(get_engine(cfg))
+    with Session() as s:
+        repo = Repository(s)
+        values = repo.all_values()
+
+    companies = {v.company for v in values}
+
+    # One winning reading per (company, field, year), decided exactly as
+    # the grid decides it: a hand correction first, then the extractor's
+    # own confidence, then the lowest id as a stable tie-break.
+    grouped: dict[tuple[str, str, int | None], list[ExtractedValue]] = {}
+    for v in values:
+        grouped.setdefault((v.company, v.field, v.year), []).append(v)
+    winners = {key: min(vs, key=_summary_rank) for key, vs in grouped.items()}
+
+    # A company has ONE sub-sector -- the IDX classification it was listed
+    # under -- resolved from every filing it has, exactly as the grid
+    # resolves it, so a 2023 filing that never printed the classification
+    # still belongs to the sector the 2024 cover declared.
+    subsector_readings: dict[str, list[ExtractedValue]] = {}
+    for v in values:
+        if v.field == "sub_sector" and (v.text_value or "").strip():
+            subsector_readings.setdefault(v.company, []).append(v)
+    subsector_of = {
+        comp: (min(vs, key=_summary_rank).text_value or "").strip()
+        for comp, vs in subsector_readings.items()
+    }
+    subsector_counts: dict[str, int] = {}
+    for sub in subsector_of.values():
+        subsector_counts[sub] = subsector_counts.get(sub, 0) + 1
+
+    # The figure each company most recently reported: the winning reading
+    # of its latest year that carried a number. An undated report (year
+    # None) cannot be ordered against dated ones, so it never wins a
+    # "latest" slot; coverage still counts it, because a figure the
+    # company did report is a figure the company reported.
+    latest: dict[tuple[str, str], ExtractedValue] = {}
+    covered: dict[str, set[str]] = {}
+    for (comp, field, year), winner in winners.items():
+        if winner.normalized_value is None:
+            continue
+        covered.setdefault(field, set()).add(comp)
+        if year is None:
+            continue
+        current = latest.get((comp, field))
+        if current is None or year > (current.year or 0):
+            latest[(comp, field)] = winner
+
+    leaders: dict[str, list[dict[str, Any]]] = {}
+    for field in FINANCIAL_LEADER_FIELDS:
+        ranked = [(comp, w) for (comp, f), w in latest.items() if f == field]
+        # Largest first; the company name breaks ties so the order is
+        # stable across requests.
+        ranked.sort(key=lambda cw: (-(cw[1].normalized_value or 0.0), cw[0]))
+        leaders[field] = [
+            {"company": comp, "year": w.year, "value": w.normalized_value}
+            for comp, w in ranked[:8]
+        ]
+
+    return {
+        "subsectors": [
+            {"subsector": sub, "companies": n}
+            for sub, n in sorted(
+                subsector_counts.items(), key=lambda kv: (-kv[1], kv[0])
+            )[:12]
+        ],
+        "undeclared_subsectors": len(companies) - len(subsector_of),
+        "leaders": leaders,
+        "coverage": {
+            field: len(covered.get(field, set()))
+            for field in FINANCIAL_COVERAGE_FIELDS
+        },
+    }
+
+
+# --------------------------------------------------------------------------
 # batch control
 # --------------------------------------------------------------------------
 

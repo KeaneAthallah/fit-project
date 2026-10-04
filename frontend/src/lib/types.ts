@@ -264,6 +264,22 @@ export interface CompanyRow {
   status_counts: Record<string, number>
 }
 
+/** GET /api/summary/financials — the corpus-level aggregates the
+ *  home dashboard leads with. `leaders[field]` is ranked largest
+ *  first, holding each company's most recently reported figure;
+ *  `coverage` counts the distinct companies that report each of
+ *  the nine indicators. */
+export interface FinancialPulse {
+  subsectors: { subsector: string; companies: number }[]
+  /** Companies whose filings never declared a sub-sector. */
+  undeclared_subsectors: number
+  leaders: Record<
+    string,
+    { company: string; year: number | null; value: number | null }[]
+  >
+  coverage: Record<string, number>
+}
+
 export interface ValidationFacets {
   statuses: { status: string; count: number }[]
   check_names: { check_name: string; count: number }[]
@@ -338,6 +354,13 @@ export interface SummaryMetricPoint {
   status?: string
   is_edited?: boolean
   disputed?: boolean
+  /** The declared sub-sector rides here instead of
+   *  `normalized_value`, because it is a classification, not a
+   *  figure. */
+  text_value?: string | null
+  /** Statement page the figure was read from, when known. */
+  page?: number | null
+  confidence?: number
   candidates?: SummaryCandidate[]
 }
 

@@ -1,5 +1,18 @@
 import { describe, expect, it } from 'vitest'
-import { bytes, currencyLabel, currencyOptions, dec, duration, num, pct, rupiah, titleCase } from './format'
+import {
+  bytes,
+  compactRupiah,
+  currencyLabel,
+  currencyOptions,
+  dec,
+  deltaShort,
+  deltaText,
+  duration,
+  num,
+  pct,
+  rupiah,
+  titleCase,
+} from './format'
 
 describe('num / rupiah / dec', () => {
   it('keeps every digit instead of rounding a scanned figure', () => {
@@ -73,11 +86,71 @@ describe('bytes', () => {
   })
 })
 
+describe('compactRupiah', () => {
+  it('scales to the Indonesian units a reader scans', () => {
+    expect(compactRupiah(12_450_000_000_000)).toBe('Rp 12,45 T')
+    expect(compactRupiah(850_200_000_000)).toBe('Rp 850,2 M')
+    expect(compactRupiah(425_700_000)).toBe('Rp 425,7 Jt')
+    // A round figure does not carry padded zeros.
+    expect(compactRupiah(1_000_000_000_000)).toBe('Rp 1 T')
+    expect(compactRupiah(950)).toBe('Rp 950')
+  })
+
+  it('puts a loss in parentheses, the way the statements print it', () => {
+    expect(compactRupiah(-245_600_000_000)).toBe('Rp (245,6 M)')
+    expect(compactRupiah(-500)).toBe('Rp (500)')
+  })
+
+  it('keeps zero and falls back rather than inventing a figure', () => {
+    expect(compactRupiah(0)).toBe('Rp 0')
+    expect(compactRupiah(null)).toBe('—')
+    expect(compactRupiah(undefined)).toBe('—')
+    expect(compactRupiah(Number.NaN)).toBe('—')
+  })
+})
+
+describe('deltaText / deltaShort', () => {
+  it('reads the change against the previous year', () => {
+    expect(deltaText(1_080, 1_000)).toEqual({
+      text: '+8% dari tahun lalu',
+      tone: 'up',
+    })
+    expect(deltaText(900, 1_000)?.tone).toBe('down')
+    expect(deltaText(900, 1_000)?.text).toBe('-10% dari tahun lalu')
+    expect(deltaText(1_000, 1_000)?.tone).toBe('flat')
+  })
+
+  it('reports a state instead of a percentage when the base is a loss', () => {
+    // A percentage change out of a loss computes to nonsense,
+    // so the reader gets the event instead.
+    expect(deltaText(100, -50)).toEqual({
+      text: 'kembali laba dari tahun lalu',
+      tone: 'up',
+    })
+    expect(deltaText(-80, -50)?.text).toBe('rugi melebar dari tahun lalu')
+    expect(deltaText(-20, -50)?.text).toBe('rugi menyusut dari tahun lalu')
+  })
+
+  it('says nothing when either year is missing', () => {
+    expect(deltaText(100, null)).toBeNull()
+    expect(deltaText(null, 100)).toBeNull()
+    expect(deltaText(undefined, 100)).toBeNull()
+    expect(deltaShort(100, undefined)).toBeNull()
+  })
+
+  it('shortens for a table cell, keeping the tone', () => {
+    expect(deltaShort(1_080, 1_000)).toEqual({ text: '+8%', tone: 'up' })
+    expect(deltaShort(100, -50)).toEqual({ text: 'kembali laba', tone: 'up' })
+    expect(deltaShort(-80, -50)?.text).toBe('rugi melebar')
+    expect(deltaShort(-80, -50)?.tone).toBe('down')
+  })
+})
+
 describe('currencyLabel', () => {
   it('spells out the code and keeps "not detected" distinct from IDR', () => {
     expect(currencyLabel('IDR')).toBe('IDR — Rupiah')
-    expect(currencyLabel('USD')).toBe('USD — US Dollar ($)')
-    expect(currencyLabel('none')).toBe('Not detected')
+    expect(currencyLabel('USD')).toBe('USD — Dolar AS ($)')
+    expect(currencyLabel('none')).toBe('Tidak terdeteksi')
     expect(currencyLabel(null)).toBe('—')
     expect(currencyLabel('XYZ')).toBe('XYZ')
   })
@@ -97,34 +170,34 @@ describe('currencyOptions', () => {
 
   it('always offers the "all" escape hatch and the server counts', () => {
     expect(currencyOptions(listed)).toEqual([
-      { value: '', label: 'All currencies' },
+      { value: '', label: 'Semua mata uang' },
       { value: 'IDR', label: 'IDR — Rupiah (8093)' },
-      { value: 'USD', label: 'USD — US Dollar ($) (272)' },
+      { value: 'USD', label: 'USD — Dolar AS ($) (272)' },
     ])
   })
 
   it('keeps a filter the server stopped offering, so it can still be seen and cleared', () => {
     // A company with no USD figure drops USD from the list the server returns.
     // Without this the <select> would hold a value absent from its own options
-    // and the browser would render it as "All currencies", leaving the reader
+    // and the browser would render it as "Semua mata uang", leaving the reader
     // looking at a filtered table with no sign of a filter.
     const options = currencyOptions([{ currency: 'IDR', count: 80 }], 'USD')
     expect(options.map((o) => o.value)).toEqual(['', 'IDR', 'USD'])
-    expect(options.at(-1)?.label).toBe('USD — US Dollar ($) (0)')
+    expect(options.at(-1)?.label).toBe('USD — Dolar AS ($) (0)')
   })
 
   it('reports the real count when the filter is still listed', () => {
     expect(currencyOptions(listed, 'USD').filter((o) => o.value === 'USD')).toHaveLength(1)
-    expect(currencyOptions(listed, 'USD').at(-1)?.label).toBe('USD — US Dollar ($) (272)')
+    expect(currencyOptions(listed, 'USD').at(-1)?.label).toBe('USD — Dolar AS ($) (272)')
   })
 
   it('labels an empty currency as undetected rather than dropping it', () => {
     const options = currencyOptions([{ currency: 'IDR', count: 5 }], 'none')
-    expect(options.at(-1)).toEqual({ value: 'none', label: 'Not detected (0)' })
+    expect(options.at(-1)).toEqual({ value: 'none', label: 'Tidak terdeteksi (0)' })
   })
 
   it('adds nothing when no filter is set', () => {
     expect(currencyOptions(listed, '')).toEqual(currencyOptions(listed))
-    expect(currencyOptions(undefined)).toEqual([{ value: '', label: 'All currencies' }])
+    expect(currencyOptions(undefined)).toEqual([{ value: '', label: 'Semua mata uang' }])
   })
 })

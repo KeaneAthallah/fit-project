@@ -1026,3 +1026,73 @@ class TestExcelExport:
         ws = _workbook(_export(client, company="PT NOPE"))["Summary"]
         assert [c.value for c in ws[1]][:3] == ["Company", "Year", "Currency"]
         assert ws.max_row == 1
+
+
+# --------------------------------------------------------------------------
+# GET /api/summary/financials -- the corpus-level aggregates the home
+# dashboard leads with. The contract: the same winner rules as the grid,
+# the latest reported year per company, and coverage that counts
+# companies, not readings.
+# --------------------------------------------------------------------------
+
+
+class TestFinancialPulse:
+    def test_leaders_use_the_latest_year_not_the_largest_reading(self, client):
+        """AAA's 2023 assets (900k) are smaller than its 2024 ones. A
+        ranking keyed on the biggest single reading would show the stale
+        year, so the latest reported year must win."""
+        data = client.get("/api/summary/financials").json()
+        assert [
+            (r["company"], r["year"], r["value"])
+            for r in data["leaders"]["total_assets"]
+        ] == [
+            ("PT BBB Tbk", 2024, 2_000_000.0),
+            ("PT AAA Tbk", 2024, 1_000_000.0),
+        ]
+
+    def test_leaders_rank_per_field(self, client):
+        data = client.get("/api/summary/financials").json()
+        assert data["leaders"]["sales_and_revenue"] == [
+            {"company": "PT AAA Tbk", "year": 2024, "value": 800_000.0}
+        ]
+        assert data["leaders"]["total_equity"] == [
+            {"company": "PT AAA Tbk", "year": 2024, "value": 600_000.0}
+        ]
+        # Nobody reports the headline profit figure, so the ranking is
+        # empty rather than full of zeros.
+        assert data["leaders"]["total_profit_loss"] == []
+
+    def test_subsectors_count_companies_once(self, client):
+        data = client.get("/api/summary/financials").json()
+        assert data["subsectors"] == [
+            {"subsector": "11. Crops", "companies": 1},
+            {"subsector": "D2. Food & Beverage", "companies": 1},
+        ]
+        # BBB declares no classification at all, and that is a state the
+        # dashboard can say out loud.
+        assert data["undeclared_subsectors"] == 1
+
+    def test_coverage_counts_distinct_companies(self, client):
+        data = client.get("/api/summary/financials").json()
+        coverage = data["coverage"]
+        # AAA and BBB both report assets; CCC's "sales" is a different
+        # field from "sales_and_revenue" and must not count as it.
+        assert coverage["total_assets"] == 2
+        assert coverage["sales_and_revenue"] == 1
+        # BBB reports net_income twice (dated and undated) -- one company.
+        assert coverage["net_income"] == 1
+        assert coverage["non_controlling_interest"] == 0
+
+    def test_an_empty_corpus_pulses_empty(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("AI_PROVIDER", raising=False)
+        cfg = load_config()
+        cfg.database_url = f"sqlite:///{(tmp_path / 'db' / 'processing.db').as_posix()}"
+        set_config(cfg)
+        app = create_app(cfg)
+        app.dependency_overrides[get_config] = lambda: cfg
+        with TestClient(app) as c:
+            data = c.get("/api/summary/financials").json()
+        assert data["subsectors"] == []
+        assert data["undeclared_subsectors"] == 0
+        assert data["leaders"]["total_assets"] == []
+        assert all(n == 0 for n in data["coverage"].values())

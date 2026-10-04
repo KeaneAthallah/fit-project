@@ -10,6 +10,7 @@ import type {
   PageRow,
   ProcessingState,
   Summary,
+  FinancialPulse,
   ValidationCheck,
   ValidationFacets,
   ValueFacets,
@@ -43,7 +44,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     })
   } catch {
     throw new ApiError(
-      'Cannot reach the backend. Is `python main.py dashboard` running on port 8000?',
+      'Backend tidak dapat dijangkau. Apakah `python main.py dashboard` berjalan di port 8000?',
       0,
     )
   }
@@ -86,6 +87,13 @@ export function qs(params: Record<string, string | number | boolean | string[] |
 
 export const api = {
   summary: () => request<Summary>('/summary'),
+
+  /** Corpus-level financial aggregates: which sub-sectors are
+   *  covered, the largest companies by each headline figure, and
+   *  how many companies report each of the nine indicators.
+   *  Computed with the same winner rules as the results grid, so
+   *  a leader here cannot disagree with the grid. */
+  financialPulse: () => request<FinancialPulse>('/summary/financials'),
 
   documents: (params: Record<string, string | number | boolean | null>) =>
     request<Paged<DocumentSummary>>(`/documents${qs(params)}`),

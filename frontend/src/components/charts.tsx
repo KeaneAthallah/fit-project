@@ -41,7 +41,7 @@ export function Donut({
   if (total === 0) {
     return (
       <div className="flex min-h-[10rem] items-center justify-center py-4 text-sm text-muted-foreground">
-        No data yet
+        Belum ada data
       </div>
     )
   }
@@ -148,7 +148,7 @@ function Legend({ slices }: { slices: (Slice & { fraction: number })[] }) {
  *  are company or check names. */
 export function BarList({
   items,
-  emptyLabel = 'Nothing to show',
+  emptyLabel = 'Tidak ada yang ditampilkan',
   formatValue = (n: number) => n.toLocaleString('id-ID'),
   color = 'var(--chart-2)',
 }: {

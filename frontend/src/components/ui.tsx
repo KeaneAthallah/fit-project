@@ -179,7 +179,7 @@ export function Spinner({ className = 'h-4 w-4' }: { className?: string }) {
       // Spinners report status, so they keep animating under reduced-motion.
       data-essential-motion
       role="status"
-      aria-label="Loading"
+      aria-label="Memuat"
     >
       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
       <path className="opacity-90" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.4 0 0 5.4 0 12h4z" />
@@ -408,7 +408,7 @@ export function MultiSelect({
   options,
   values,
   onChange,
-  placeholder = 'All',
+  placeholder = 'Semua',
   className = '',
 }: {
   label?: ReactNode
@@ -464,7 +464,7 @@ export function MultiSelect({
       ? placeholder
       : values.length === 1
         ? labelOf(values[0])
-        : `${values.length} selected`
+        : `${values.length} dipilih`
 
   return (
     <div className="min-w-0">
@@ -514,7 +514,7 @@ export function MultiSelect({
           >
             {options.length === 0 && (
               <p className="px-2 py-1.5 text-sm text-muted-foreground">
-                No options
+                Tidak ada opsi
               </p>
             )}
             {options.map((o) => (
@@ -549,7 +549,7 @@ export function MultiSelect({
                   onClick={() => onChange([])}
                   className="w-full rounded px-2 py-1.5 text-left text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
                 >
-                  Clear
+                  Bersihkan
                 </button>
               </div>
             )}
@@ -826,7 +826,7 @@ export function SkeletonTable({ rows = 8, cols = 6 }: { rows?: number; cols?: nu
   )
 }
 
-export function Loading({ label = 'Loading.' }: { label?: string }) {
+export function Loading({ label = 'Memuat.' }: { label?: string }) {
   return (
     <div
       role="status"
@@ -916,7 +916,7 @@ export function ErrorBanner({
   return (
     <Alert
       tone="danger"
-      title="Something went wrong."
+      title="Terjadi kesalahan."
       action={
         onRetry ? (
           <Button size="sm" variant="secondary" onClick={onRetry}>
@@ -1045,10 +1045,10 @@ export function Pagination({
           disabled={page <= 1}
           onClick={() => onPage(page - 1)}
         >
-          Previous
+          Sebelumnya
         </Button>
         <span className="tnum px-2 text-xs text-muted-foreground">
-          Page {page} / {Math.max(pages, 1)}
+          Halaman {page} / {Math.max(pages, 1)}
         </span>
         <Button
           size="sm"
@@ -1056,7 +1056,7 @@ export function Pagination({
           disabled={page >= pages}
           onClick={() => onPage(page + 1)}
         >
-          Next
+          Berikutnya
         </Button>
       </div>
     </div>

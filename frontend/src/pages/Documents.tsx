@@ -2,7 +2,12 @@ import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
 import { useDebounced, useLiveRefresh, useQuery } from '../hooks/useQuery'
-import { dateTime, num } from '../lib/format'
+import { dateTime } from '../lib/format'
+import {
+  CHECK_STATUS_LABELS,
+  DOC_STATUS_LABELS,
+  documents as s,
+} from '../lib/strings'
 import { useProcessing } from '../lib/processing-context'
 import { Confidence, DocStatusBadge } from '../components/badges'
 import {
@@ -25,34 +30,40 @@ import {
 const PAGE_SIZES = [25, 50, 100]
 
 const STATUS_OPTIONS = [
-  { value: '', label: 'All statuses' },
-  { value: 'COMPLETED', label: 'Completed' },
-  { value: 'REVIEW_REQUIRED', label: 'Review required' },
-  { value: 'FAILED', label: 'Failed' },
-  { value: 'PROCESSING', label: 'Processing' },
-  { value: 'DISCOVERED', label: 'Discovered' },
-  { value: 'DUPLICATE', label: 'Duplicate' },
+  { value: '', label: s.allStatuses },
+  { value: 'COMPLETED', label: DOC_STATUS_LABELS.COMPLETED },
+  { value: 'REVIEW_REQUIRED', label: DOC_STATUS_LABELS.REVIEW_REQUIRED },
+  { value: 'FAILED', label: DOC_STATUS_LABELS.FAILED },
+  { value: 'PROCESSING', label: DOC_STATUS_LABELS.PROCESSING },
+  { value: 'DISCOVERED', label: DOC_STATUS_LABELS.DISCOVERED },
+  { value: 'DUPLICATE', label: DOC_STATUS_LABELS.DUPLICATE },
 ]
 
 const VALIDATION_OPTIONS = [
-  { value: '', label: 'Any validation state' },
-  { value: 'VALID', label: 'Validation: valid' },
-  { value: 'ERROR', label: 'Validation: error' },
-  { value: 'WARNING', label: 'Validation: warning' },
-  { value: 'REVIEW_REQUIRED', label: 'Validation: review' },
+  { value: '', label: s.anyValidationState },
+  { value: 'VALID', label: `${s.validationPrefix} ${CHECK_STATUS_LABELS.VALID}` },
+  { value: 'ERROR', label: `${s.validationPrefix} ${CHECK_STATUS_LABELS.ERROR}` },
+  {
+    value: 'WARNING',
+    label: `${s.validationPrefix} ${CHECK_STATUS_LABELS.WARNING}`,
+  },
+  {
+    value: 'REVIEW_REQUIRED',
+    label: `${s.validationPrefix} ${CHECK_STATUS_LABELS.REVIEW_REQUIRED}`,
+  },
 ]
 
 /** Sort keys must match `sort_columns` in `list_documents`. Column order here
  *  is presentation only - the table headers drive the sort. */
 const SORTABLE = [
-  { value: 'company', label: 'Company' },
-  { value: 'filename', label: 'File name' },
-  { value: 'status', label: 'Status' },
-  { value: 'pages', label: 'Pages' },
-  { value: 'confidence', label: 'Confidence' },
-  { value: 'year', label: 'Year' },
-  { value: 'updated', label: 'Updated' },
-  { value: 'id', label: 'ID' },
+  { value: 'company', label: s.sortKeys.company },
+  { value: 'filename', label: s.sortKeys.filename },
+  { value: 'status', label: s.sortKeys.status },
+  { value: 'pages', label: s.sortKeys.pages },
+  { value: 'confidence', label: s.sortKeys.confidence },
+  { value: 'year', label: s.sortKeys.year },
+  { value: 'updated', label: s.sortKeys.updated },
+  { value: 'id', label: s.sortKeys.id },
 ]
 
 type SortKey = (typeof SORTABLE)[number]['value']
@@ -125,7 +136,7 @@ export default function Documents() {
   }
 
   const companyOptions = [
-    { value: '', label: 'All companies' },
+    { value: '', label: s.allCompanies },
     ...(companies.data?.items ?? []).map((c) => ({
       value: c.company,
       label: c.company,
@@ -138,18 +149,18 @@ export default function Documents() {
   return (
     <>
       <PageHeader
-        title="Documents"
-        subtitle={data ? `${num(data.pagination.total)} documents match` : undefined}
+        title={s.title}
+        subtitle={data ? s.matchCount(data.pagination.total) : undefined}
         actions={
           <div className="flex items-center gap-2">
             {running && (
               <Badge tone="info" className="h-8 px-2.5">
                 <Spinner className="h-3 w-3" />
-                Live
+                {s.live}
               </Badge>
             )}
             <Button variant="secondary" pending={loading} onClick={refetch}>
-              Refresh
+              {s.refresh}
             </Button>
           </div>
         }
@@ -158,25 +169,25 @@ export default function Documents() {
       <Card className="mb-4">
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <Input
-            label="Search"
-            placeholder="Company or file name"
+            label={s.search}
+            placeholder={s.searchPlaceholder}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
           <Select
-            label="Status"
+            label={s.status}
             options={STATUS_OPTIONS}
             value={status}
             onChange={(e) => setStatus(e.target.value)}
           />
           <Select
-            label="Company"
+            label={s.company}
             options={companyOptions}
             value={company}
             onChange={(e) => setCompany(e.target.value)}
           />
           <Select
-            label="Validation"
+            label={s.validation}
             options={VALIDATION_OPTIONS}
             value={validationStatus}
             onChange={(e) => setValidationStatus(e.target.value)}
@@ -184,18 +195,21 @@ export default function Documents() {
         </div>
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3">
           <p className="text-xs text-muted-foreground">
-            Sort: <span className="font-medium text-foreground">{order === 'asc' ? 'ascending' : 'descending'}</span>
-            <span className="hidden sm:inline"> &middot; tap a column heading to change</span>
+            {s.sort}:{' '}
+            <span className="font-medium text-foreground">
+              {order === 'asc' ? s.ascending : s.descending}
+            </span>
+            <span className="hidden sm:inline"> &middot; {s.sortHint}</span>
           </p>
           <div className="flex items-center gap-2">
             {activeFilters && (
               <Button size="sm" variant="ghost" onClick={clearAll}>
-                Clear filters
+                {s.clearFilters}
               </Button>
             )}
             <div className="w-24">
               <Select
-                label="Rows"
+                label={s.rows}
                 options={PAGE_SIZES.map((n) => ({ value: String(n), label: String(n) }))}
                 value={String(pageSize)}
                 onChange={(e) => {
@@ -217,30 +231,28 @@ export default function Documents() {
           </div>
         ) : data?.items.length === 0 ? (
           <EmptyState
-            title="No documents match these filters"
+            title={s.noMatchTitle}
             hint={
-              activeFilters
-                ? 'Try clearing a filter.'
-                : 'Run the pipeline from the dashboard to discover documents.'
+              activeFilters ? s.noMatchHintFiltered : s.noMatchHint
             }
             action={
               activeFilters ? (
                 <Button size="sm" variant="secondary" onClick={clearAll}>
-                  Clear filters
+                  {s.clearFilters}
                 </Button>
               ) : undefined
             }
           />
         ) : (
           <>
-            <Table caption="Documents" stickyHeader>
+            <Table caption={s.title} stickyHeader>
               <thead>
                 <tr>
                   <Th onSort={() => toggleSort('company')} sorted={sort === 'company' ? order : false}>
-                    Company
+                    {s.tableHeaders.company}
                   </Th>
                   <Th onSort={() => toggleSort('status')} sorted={sort === 'status' ? order : false}>
-                    Status
+                    {s.tableHeaders.status}
                   </Th>
                   <Th
                     align="right"
@@ -248,7 +260,7 @@ export default function Documents() {
                     onSort={() => toggleSort('year')}
                     sorted={sort === 'year' ? order : false}
                   >
-                    Year
+                    {s.tableHeaders.year}
                   </Th>
                   <Th
                     align="right"
@@ -256,30 +268,30 @@ export default function Documents() {
                     onSort={() => toggleSort('pages')}
                     sorted={sort === 'pages' ? order : false}
                   >
-                    Pages
+                    {s.tableHeaders.pages}
                   </Th>
                   <Th align="right" hideBelow="xl">
-                    Financial
+                    {s.tableHeaders.financial}
                   </Th>
                   <Th
                     hideBelow="md"
                     onSort={() => toggleSort('confidence')}
                     sorted={sort === 'confidence' ? order : false}
                   >
-                    Confidence
+                    {s.tableHeaders.confidence}
                   </Th>
                   <Th align="right" hideBelow="sm">
-                    Checks
+                    {s.tableHeaders.checks}
                   </Th>
                   <Th align="right" hideBelow="xl">
-                    Values
+                    {s.tableHeaders.values}
                   </Th>
                   <Th
                     hideBelow="lg"
                     onSort={() => toggleSort('updated')}
                     sorted={sort === 'updated' ? order : false}
                   >
-                    Updated
+                    {s.tableHeaders.updated}
                   </Th>
                 </tr>
               </thead>

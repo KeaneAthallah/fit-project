@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { api } from '../lib/api'
 import { useQuery } from '../hooks/useQuery'
 import { dateTime, dec, duration, num, rupiah, titleCase } from '../lib/format'
+import { docDetail as s } from '../lib/strings'
 import type { DocumentDetail as DocumentDetailData, ExtractedValue, ValidationCheck } from '../lib/types'
 import { CheckBadge, Confidence, DocStatusBadge, ValueStatusBadge } from '../components/badges'
 import {
@@ -33,25 +34,27 @@ function Overview({ data }: { data: DocumentDetailData }) {
   return (
     <>
       <div className="grid gap-4 lg:grid-cols-3">
-        <Card title="Extraction" className="lg:col-span-2">
+        <Card title={s.overview.title} className="lg:col-span-2">
           <dl className="grid grid-cols-2 gap-x-4 gap-y-4 sm:grid-cols-3 xl:grid-cols-4">
-            <KeyValue label="Status">
+            <KeyValue label={s.overview.status}>
               <DocStatusBadge status={data.status} />
             </KeyValue>
-            <KeyValue label="Reporting year">{data.reporting_year ?? '-'}</KeyValue>
-            <KeyValue label="PDF type">{titleCase(data.pdf_type ?? '-')}</KeyValue>
-            <KeyValue label="OCR used">{data.ocr_used ? 'Yes' : 'No'}</KeyValue>
-            <KeyValue label="Pages">{num(data.page_count)}</KeyValue>
-            <KeyValue label="Text pages">{num(data.text_pages)}</KeyValue>
-            <KeyValue label="OCR pages">{num(data.ocr_pages)}</KeyValue>
-            <KeyValue label="Financial pages">{num(data.financial_pages)}</KeyValue>
-            <KeyValue label="Values">{num(data.values.length)}</KeyValue>
-            <KeyValue label="Processing time">{duration(data.processing_time)}</KeyValue>
+            <KeyValue label={s.overview.reportingYear}>{data.reporting_year ?? '-'}</KeyValue>
+            <KeyValue label={s.overview.pdfType}>{titleCase(data.pdf_type ?? '-')}</KeyValue>
+            <KeyValue label={s.overview.ocrUsed}>
+              {data.ocr_used ? s.overview.yes : s.overview.no}
+            </KeyValue>
+            <KeyValue label={s.overview.pages}>{num(data.page_count)}</KeyValue>
+            <KeyValue label={s.overview.textPages}>{num(data.text_pages)}</KeyValue>
+            <KeyValue label={s.overview.ocrPages}>{num(data.ocr_pages)}</KeyValue>
+            <KeyValue label={s.overview.financialPages}>{num(data.financial_pages)}</KeyValue>
+            <KeyValue label={s.overview.values}>{num(data.values.length)}</KeyValue>
+            <KeyValue label={s.overview.processingTime}>{duration(data.processing_time)}</KeyValue>
             {/* The confidence meter is wider than a truncated cell. */}
-            <KeyValue label="Avg confidence" truncate={false}>
+            <KeyValue label={s.overview.avgConfidence} truncate={false}>
               <Confidence value={data.avg_confidence} />
             </KeyValue>
-            <KeyValue label="Completed">{dateTime(data.completed_at)}</KeyValue>
+            <KeyValue label={s.overview.completed}>{dateTime(data.completed_at)}</KeyValue>
           </dl>
           {data.error_message && (
             <Alert tone="danger" className="mt-4">
@@ -60,9 +63,9 @@ function Overview({ data }: { data: DocumentDetailData }) {
           )}
         </Card>
 
-        <Card title="Validation" subtitle={`${num(data.checks.length)} checks recorded`}>
+        <Card title={s.validation.title} subtitle={s.validation.subtitle(data.checks.length)}>
           {data.checks.length === 0 ? (
-            <EmptyState title="No validation checks" />
+            <EmptyState title={s.validation.none} />
           ) : (
             <ul className="space-y-2">
               {Object.entries(counts)
@@ -79,12 +82,15 @@ function Overview({ data }: { data: DocumentDetailData }) {
       </div>
 
       <div className="mt-4">
-        <Card title="Source file">
+        <Card title={s.sourceFile.title}>
           {/* break-all: a Windows path has no spaces to break on, and a long
               one would otherwise widen the card. */}
           <p className="font-mono text-xs break-all text-muted-foreground">{data.file_path}</p>
           <p className="mt-2 text-xs text-muted-foreground">
-            Created {dateTime(data.created_at)} &middot; Updated {dateTime(data.updated_at)}
+            {s.sourceFile.createdUpdated(
+              dateTime(data.created_at),
+              dateTime(data.updated_at),
+            )}
           </p>
         </Card>
       </div>
@@ -93,23 +99,23 @@ function Overview({ data }: { data: DocumentDetailData }) {
 }
 
 function ValuesTable({ values }: { values: ExtractedValue[] }) {
-  if (values.length === 0) return <EmptyState title="No values extracted" />
+  if (values.length === 0) return <EmptyState title={s.values.none} />
   return (
-    <Table caption="Extracted values">
+    <Table caption={s.values.caption}>
       <thead>
         <tr>
-          <Th>Statement</Th>
-          <Th hideBelow="sm">Field</Th>
-          <Th hideBelow="lg">Raw label</Th>
-          <Th align="right">Raw</Th>
-          <Th align="right">Normalised</Th>
-          <Th hideBelow="xl">Unit</Th>
+          <Th>{s.values.statement}</Th>
+          <Th hideBelow="sm">{s.values.field}</Th>
+          <Th hideBelow="lg">{s.values.rawLabel}</Th>
+          <Th align="right">{s.values.raw}</Th>
+          <Th align="right">{s.values.normalised}</Th>
+          <Th hideBelow="xl">{s.values.unit}</Th>
           <Th align="right" hideBelow="sm">
-            Page
+            {s.values.page}
           </Th>
-          <Th hideBelow="lg">Method</Th>
-          <Th>Confidence</Th>
-          <Th hideBelow="md">Status</Th>
+          <Th hideBelow="lg">{s.values.method}</Th>
+          <Th>{s.values.confidence}</Th>
+          <Th hideBelow="md">{s.values.status}</Th>
         </tr>
       </thead>
       <tbody>
@@ -153,19 +159,19 @@ function ValuesTable({ values }: { values: ExtractedValue[] }) {
 }
 
 function ChecksTable({ checks }: { checks: ValidationCheck[] }) {
-  if (checks.length === 0) return <EmptyState title="No validation checks recorded" />
+  if (checks.length === 0) return <EmptyState title={s.checks.none} />
   return (
-    <Table caption="Validation checks">
+    <Table caption={s.checks.caption}>
       <thead>
         <tr>
-          <Th>Check</Th>
-          <Th>Status</Th>
-          <Th align="right">Expected</Th>
-          <Th align="right">Actual</Th>
+          <Th>{s.checks.check}</Th>
+          <Th>{s.checks.status}</Th>
+          <Th align="right">{s.checks.expected}</Th>
+          <Th align="right">{s.checks.actual}</Th>
           <Th align="right" hideBelow="md">
-            Difference
+            {s.checks.difference}
           </Th>
-          <Th hideBelow="sm">Message</Th>
+          <Th hideBelow="sm">{s.checks.message}</Th>
         </tr>
       </thead>
       <tbody>
@@ -230,7 +236,7 @@ function PagesTable({ docId }: { docId: number }) {
     <>
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b border-border px-4 py-3">
         <Checkbox
-          label="Load extracted page text"
+          label={s.pages.loadText}
           checked={includeText}
           onChange={(e) => {
             setIncludeText(e.target.checked)
@@ -239,30 +245,28 @@ function PagesTable({ docId }: { docId: number }) {
           }}
         />
         <p className="text-xs text-muted-foreground">
-          {includeText
-            ? 'Text is fetched for the current page only.'
-            : 'Enable text to inspect what OCR read.'}
+          {includeText ? s.pages.textCurrentOnly : s.pages.textEnableHint}
         </p>
       </div>
 
       {data.items.length === 0 ? (
-        <EmptyState title="No page records" />
+        <EmptyState title={s.pages.none} />
       ) : (
-        <Table caption="Pages">
+        <Table caption={s.pages.caption}>
           <thead>
             <tr>
-              <Th align="right">Page</Th>
-              <Th>Type</Th>
-              <Th hideBelow="sm">Section</Th>
+              <Th align="right">{s.pages.page}</Th>
+              <Th>{s.pages.type}</Th>
+              <Th hideBelow="sm">{s.pages.section}</Th>
               <Th align="right" hideBelow="md">
-                OCR conf.
+                {s.pages.ocrConfidence}
               </Th>
               <Th align="right" hideBelow="lg">
-                OCR time
+                {s.pages.ocrTime}
               </Th>
-              <Th align="right">Chars</Th>
+              <Th align="right">{s.pages.chars}</Th>
               <Th align="right" hideBelow="md">
-                Flags
+                {s.pages.flags}
               </Th>
             </tr>
           </thead>
@@ -280,9 +284,9 @@ function PagesTable({ docId }: { docId: number }) {
                         title={
                           includeText
                             ? isOpen
-                              ? 'Hide extracted text'
-                              : 'Show extracted text'
-                            : 'Enable "Load extracted page text" first'
+                              ? s.pages.hideText
+                              : s.pages.showText
+                            : s.pages.enableFirst
                         }
                         aria-expanded={isOpen}
                         className="inline-flex h-8 min-w-10 items-center justify-center gap-1 rounded-md text-muted-foreground enabled:hover:bg-accent enabled:hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
@@ -319,9 +323,9 @@ function PagesTable({ docId }: { docId: number }) {
                     </Td>
                     <Td align="right" hideBelow="md">
                       <span className="flex flex-wrap justify-end gap-1">
-                        {p.is_relevant && <span className="sr-only">Relevant page. </span>}
-                        {p.is_relevant && <RelevanceChip label="relevant" />}
-                        {p.is_parent_only && <RelevanceChip label="parent only" />}
+                        {p.is_relevant && <span className="sr-only">{s.pages.relevantSr}</span>}
+                        {p.is_relevant && <RelevanceChip label={s.pages.relevant} />}
+                        {p.is_parent_only && <RelevanceChip label={s.pages.parentOnly} />}
                       </span>
                     </Td>
                   </tr>
@@ -334,7 +338,7 @@ function PagesTable({ docId }: { docId: number }) {
                           </pre>
                         ) : (
                           <p className="text-xs text-muted-foreground">
-                            No text recorded for this page.
+                            {s.pages.noText}
                           </p>
                         )}
                       </td>
@@ -376,7 +380,7 @@ export default function DocumentDetail() {
   const detail = useQuery(() => api.document(id), [id])
 
   if (Number.isNaN(id)) {
-    return <ErrorBanner message="Invalid document id" />
+    return <ErrorBanner message={s.invalidId} />
   }
 
   if (detail.initialLoading) {
@@ -411,7 +415,7 @@ export default function DocumentDetail() {
           >
             <path d="M15 6l-6 6 6 6" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
-          All documents
+          {s.allDocuments}
         </Link>
       </div>
 
@@ -427,7 +431,7 @@ export default function DocumentDetail() {
         <div className="flex shrink-0 items-center gap-2">
           <DocStatusBadge status={data.status} />
           <Button variant="secondary" pending={detail.loading} onClick={detail.refetch}>
-            Refresh
+            {s.refresh}
           </Button>
         </div>
       </div>
@@ -440,9 +444,9 @@ export default function DocumentDetail() {
           active={tab}
           onChange={setTab}
           tabs={[
-            { key: 'values', label: 'Extracted values', count: data.values.length },
-            { key: 'checks', label: 'Validation checks', count: data.checks.length },
-            { key: 'pages', label: 'Pages', count: data.page_rows },
+            { key: 'values', label: s.tabs.values, count: data.values.length },
+            { key: 'checks', label: s.tabs.checks, count: data.checks.length },
+            { key: 'pages', label: s.tabs.pages, count: data.page_rows },
           ]}
         />
 

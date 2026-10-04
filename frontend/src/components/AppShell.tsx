@@ -1,17 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { relativeTime } from '../lib/format'
+import { app, nav } from '../lib/strings'
 import { useProcessing } from '../lib/processing-context'
 import { useTheme, type ThemePreference } from '../lib/theme-context'
 import { Badge, IconButton, Spinner, Tooltip } from './ui'
 
 const NAV = [
-  { to: '/', label: 'Dashboard', icon: 'dashboard', end: true },
-  { to: '/documents', label: 'Documents', icon: 'documents' },
-  { to: '/validations', label: 'Review queue', icon: 'validations' },
-  { to: '/values', label: 'Values', icon: 'values' },
-  { to: '/results', label: 'Results', icon: 'results' },
-  { to: '/exports', label: 'Exports', icon: 'exports' },
+  { to: '/', label: nav.dashboard, icon: 'dashboard', end: true },
+  { to: '/documents', label: nav.documents, icon: 'documents' },
+  { to: '/validations', label: nav.validations, icon: 'validations' },
+  { to: '/values', label: nav.values, icon: 'values' },
+  { to: '/results', label: nav.results, icon: 'results' },
+  { to: '/exports', label: nav.exports, icon: 'exports' },
 ] as const
 
 const SIDEBAR_COLLAPSED_KEY = 'fre.sidebar'
@@ -57,9 +58,9 @@ function Icon({ name, className = 'h-5 w-5' }: { name: string; className?: strin
 /* ------------------------------------------------------------------ theme */
 
 const THEME_OPTIONS: { value: ThemePreference; label: string; icon: string }[] = [
-  { value: 'light', label: 'Light', icon: 'sun' },
-  { value: 'dark', label: 'Dark', icon: 'moon' },
-  { value: 'system', label: 'System', icon: 'monitor' },
+  { value: 'light', label: app.themeLight, icon: 'sun' },
+  { value: 'dark', label: app.themeDark, icon: 'moon' },
+  { value: 'system', label: app.themeSystem, icon: 'monitor' },
 ]
 
 function ThemeToggle() {
@@ -67,7 +68,7 @@ function ThemeToggle() {
   return (
     <div
       role="group"
-      aria-label="Colour theme"
+      aria-label={app.themeLabel}
       className="flex shrink-0 items-center gap-0.5 rounded-lg border border-border bg-muted/60 p-0.5"
     >
       {THEME_OPTIONS.map((option) => {
@@ -82,8 +83,8 @@ function ThemeToggle() {
               // system button is announced together with what it resolved to.
               aria-label={
                 option.value === 'system'
-                  ? `System theme (currently ${resolved})`
-                  : `${option.label} theme`
+                  ? `${app.themeSystem} (${resolved})`
+                  : app.themeTooltip(option.label)
               }
               className={`inline-flex h-9 w-9 items-center justify-center rounded-md transition-colors ${
                 active
@@ -130,7 +131,7 @@ function NavList({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?: (
               {collapsed && (
                 <span className="sr-only">
                   {item.label}
-                  {isActive ? ' (current page)' : ''}
+                  {isActive ? ' (halaman ini)' : ''}
                 </span>
               )}
             </>
@@ -147,12 +148,12 @@ function RunStatus({ collapsed }: { collapsed: boolean }) {
 
   const tone = state.running ? 'info' : state.error ? 'danger' : 'neutral'
   const label = state.running
-    ? `Running ${relativeTime(state.started_at)}`
+    ? `Berjalan ${relativeTime(state.started_at)}`
     : state.error
-      ? 'Last run failed'
+      ? 'Pemrosesan terakhir gagal'
       : state.finished_at
-        ? `Idle · finished ${relativeTime(state.finished_at)}`
-        : 'Idle'
+        ? `Siaga · selesai ${relativeTime(state.finished_at)}`
+        : app.idle
 
   const badge = (
     <Badge tone={tone} className={collapsed ? 'justify-center px-1.5' : ''} title={label}>
@@ -180,12 +181,14 @@ function SidebarBrand({ collapsed }: { collapsed: boolean }) {
       {!collapsed && (
         <div className="min-w-0">
           <p className="truncate text-sm font-semibold text-sidebar-foreground">
-            Financial Extractor
+            {app.name}
           </p>
-          <p className="truncate text-[11px] text-sidebar-muted">IDX annual reports</p>
+          <p className="truncate text-[11px] text-sidebar-muted">
+            Laporan tahunan IDX
+          </p>
         </div>
       )}
-      {collapsed && <span className="sr-only">Financial Extractor</span>}
+      {collapsed && <span className="sr-only">{app.name}</span>}
     </div>
   )
 }
@@ -263,14 +266,14 @@ function MobileDrawer({ open, onClose }: { open: boolean; onClose: () => void })
         ref={ref}
         role="dialog"
         aria-modal="true"
-        aria-label="Navigation"
+        aria-label="Navigasi"
         className="absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col border-r border-sidebar-border bg-sidebar"
       >
         <div className="flex items-center justify-between gap-2 border-b border-sidebar-border px-3 py-3">
           <p className="min-w-0 truncate text-sm font-semibold text-sidebar-foreground">
-            Financial Extractor
+            {app.name}
           </p>
-          <IconButton label="Close navigation" onClick={onClose} className="text-sidebar-muted">
+          <IconButton label={app.closeNavigation} onClick={onClose} className="text-sidebar-muted">
             <Icon name="close" />
           </IconButton>
         </div>
@@ -284,11 +287,11 @@ function MobileDrawer({ open, onClose }: { open: boolean; onClose: () => void })
 /* ------------------------------------------------------------------ shell */
 
 function useRouteTitle(pathname: string): string {
-  if (pathname.startsWith('/documents/')) return 'Document detail'
+  if (pathname.startsWith('/documents/')) return 'Detail Dokumen'
   const match = NAV.find((item) =>
     'end' in item && item.end ? pathname === item.to : pathname.startsWith(item.to),
   )
-  return match?.label ?? 'Financial Extractor'
+  return match?.label ?? app.name
 }
 
 export function AppShell() {
@@ -321,7 +324,7 @@ export function AppShell() {
         href="#main-content"
         className="sr-only-focusable fixed top-3 left-3 z-60 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground"
       >
-        Skip to main content
+        Lewati ke konten utama
       </a>
 
       {/* Desktop sidebar. Sticky rather than fixed so the main column keeps a
@@ -342,8 +345,8 @@ export function AppShell() {
             className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-sm text-sidebar-muted transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
           >
             <Icon name={collapsed ? 'expand' : 'collapse'} className="h-5 w-5 shrink-0" />
-            {!collapsed && <span className="truncate">Collapse</span>}
-            {collapsed && <span className="sr-only">Expand sidebar</span>}
+            {!collapsed && <span className="truncate">Ciutkan</span>}
+            {collapsed && <span className="sr-only">Kembangkan bilah sisi</span>}
           </button>
         </div>
       </aside>
@@ -351,7 +354,7 @@ export function AppShell() {
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-40 flex items-center gap-2 border-b border-border bg-background/85 px-3 py-2 backdrop-blur-sm sm:px-4">
           <IconButton
-            label="Open navigation"
+            label={app.openNavigation}
             className="lg:hidden"
             aria-expanded={drawerOpen}
             aria-controls="mobile-navigation"
@@ -365,7 +368,6 @@ export function AppShell() {
           <h1 className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
             {routeTitle}
           </h1>
-
           <div className="hidden shrink-0 sm:block">
             <RunStatus collapsed={false} />
           </div>

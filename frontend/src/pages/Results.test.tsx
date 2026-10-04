@@ -106,12 +106,12 @@ function renderResults(search = '?view=summary') {
 }
 
 const openEditor = (label: RegExp) => screen.findByRole('button', { name: label })
-const amountInput = () => screen.findByLabelText(/corrected amount/i) as Promise<HTMLInputElement>
+const amountInput = () => screen.findByLabelText(/jumlah koreksi/i) as Promise<HTMLInputElement>
 // The trigger announces its field and its state together,
 // so it is found by role and part of its name, never by
 // the visible label alone.
 const subsectorTrigger = () =>
-  screen.getByRole('button', { name: /sub-sector/i })
+  screen.getByRole('button', { name: /subsektor/i })
 
 beforeEach(() => {
   for (const fn of Object.values(apiMock)) fn.mockReset()
@@ -133,11 +133,11 @@ beforeEach(() => {
 describe('Summary grid inline editor', () => {
   it('shows the figure that was clicked, not the one opened before it', async () => {
     renderResults()
-    fireEvent.click(await openEditor(/edit total assets for acme 2024/i))
+    fireEvent.click(await openEditor(/ubah jumlah aset untuk acme 2024/i))
     expect((await amountInput()).value).toBe('100')
 
     // Open a second figure in the same row while the first editor is still up.
-    fireEvent.click(await openEditor(/edit total liabilities for acme 2024/i))
+    fireEvent.click(await openEditor(/ubah total liabilitas untuk acme 2024/i))
 
     await waitFor(async () => {
       expect((await amountInput()).value).toBe('200')
@@ -146,10 +146,10 @@ describe('Summary grid inline editor', () => {
 
   it('saves the correction to the figure that was clicked', async () => {
     renderResults()
-    fireEvent.click(await openEditor(/edit total assets for acme 2024/i))
+    fireEvent.click(await openEditor(/ubah jumlah aset untuk acme 2024/i))
     // Switch to the other figure without typing anything, then save.
-    fireEvent.click(await openEditor(/edit total liabilities for acme 2024/i))
-    fireEvent.click(await screen.findByRole('button', { name: /save correction/i }))
+    fireEvent.click(await openEditor(/ubah total liabilitas untuk acme 2024/i))
+    fireEvent.click(await screen.findByRole('button', { name: /simpan koreksi/i }))
 
     // The unedited value of the *clicked* figure must be written to its own row.
     // This wrote the previously-opened figure's amount onto the wrong value.
@@ -163,11 +163,11 @@ describe('Summary grid inline editor', () => {
 
   it('keeps a hand-typed correction when switching figures', async () => {
     renderResults()
-    fireEvent.click(await openEditor(/edit total assets for acme 2024/i))
+    fireEvent.click(await openEditor(/ubah jumlah aset untuk acme 2024/i))
     fireEvent.change(await amountInput(), { target: { value: '1234' } })
 
-    fireEvent.click(await openEditor(/edit total liabilities for acme 2024/i))
-    fireEvent.click(await screen.findByRole('button', { name: /save correction/i }))
+    fireEvent.click(await openEditor(/ubah total liabilitas untuk acme 2024/i))
+    fireEvent.click(await screen.findByRole('button', { name: /simpan koreksi/i }))
 
     await waitFor(() => {
       expect(apiMock.updateValue).toHaveBeenCalledTimes(1)
@@ -194,19 +194,19 @@ describe('Filter state in the URL', () => {
     // there is nothing to clear.
     renderResults('?page=3')
     await waitFor(() => expect(apiMock.resultsSummary).toHaveBeenCalled())
-    expect(screen.queryByRole('button', { name: /clear \d+ filters?/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /bersihkan \d+ filter/i })).toBeNull()
   })
 
   it('counts only real filters', async () => {
     renderResults(
       '?page=3&company=ACME&year=2024&currency=USD&subsector=Food&profitable=true',
     )
-    expect(await screen.findByRole('button', { name: /clear 5 filters/i })).toBeTruthy()
+    expect(await screen.findByRole('button', { name: /bersihkan 5 filter/i })).toBeTruthy()
   })
 
   it('clears the filters and resets the page', async () => {
     renderResults('?page=3&company=ACME&year=2024')
-    fireEvent.click(await screen.findByRole('button', { name: /clear 2 filters/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /bersihkan 2 filter/i }))
 
     await waitFor(() => {
       const params = new URLSearchParams(screen.getByTestId('location').textContent ?? '')
@@ -225,7 +225,7 @@ describe('Filter state in the URL', () => {
     await waitFor(() => expect(apiMock.resultsSummary).toHaveBeenCalled())
     expect(apiMock.values).not.toHaveBeenCalled()
     expect(screen.queryByRole('tab')).toBeNull()
-    expect(screen.queryByRole('button', { name: /clear \d+ filters?/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /bersihkan \d+ filter/i })).toBeNull()
   })
 })
 
@@ -256,8 +256,8 @@ describe('Filter selects on the summary', () => {
 
   it('records the chosen company in the URL and re-queries the summary', async () => {
     renderResults()
-    await waitForOption(/^company$/i, 'AALI Astra Agro Lestari Tbk')
-    choose(/^company$/i, 'AALI Astra Agro Lestari Tbk')
+    await waitForOption(/^perusahaan$/i, 'AALI Astra Agro Lestari Tbk')
+    choose(/^perusahaan$/i, 'AALI Astra Agro Lestari Tbk')
 
     await waitFor(() => {
       expect(params().get('company')).toBe('AALI Astra Agro Lestari Tbk')
@@ -265,7 +265,7 @@ describe('Filter selects on the summary', () => {
     // The regression: a second setParam in the same handler re-read the stale
     // search params and overwrote the company with ?page=1.
     expect(params().get('page')).toBeNull()
-    expect((screen.getByLabelText(/^company$/i) as HTMLSelectElement).value).toBe(
+    expect((screen.getByLabelText(/^perusahaan$/i) as HTMLSelectElement).value).toBe(
       'AALI Astra Agro Lestari Tbk',
     )
     expect(apiMock.resultsSummary).toHaveBeenLastCalledWith(
@@ -275,8 +275,8 @@ describe('Filter selects on the summary', () => {
 
   it('leaves no stray parameters when the placeholder is chosen', async () => {
     renderResults('?company=ACME')
-    await waitForOption(/^company$/i, 'AALI Astra Agro Lestari Tbk')
-    choose(/^company$/i, '')
+    await waitForOption(/^perusahaan$/i, 'AALI Astra Agro Lestari Tbk')
+    choose(/^perusahaan$/i, '')
 
     await waitFor(() => expect(params().get('company')).toBeNull())
     // "All companies" is not a filter: the URL must go back to bare /results.
@@ -285,16 +285,16 @@ describe('Filter selects on the summary', () => {
 
   it('records the year and the currency too, and keeps them together', async () => {
     renderResults()
-    await waitForOption(/^year$/i, '2024')
-    choose(/^year$/i, '2024')
+    await waitForOption(/^tahun$/i, '2024')
+    choose(/^tahun$/i, '2024')
     await waitFor(() => expect(params().get('year')).toBe('2024'))
 
-    await waitForOption(/^company$/i, 'ACME')
-    choose(/^company$/i, 'ACME')
+    await waitForOption(/^perusahaan$/i, 'ACME')
+    choose(/^perusahaan$/i, 'ACME')
     await waitFor(() => expect(params().get('company')).toBe('ACME'))
 
-    await waitForOption(/^currency$/i, 'IDR')
-    choose(/^currency$/i, 'IDR')
+    await waitForOption(/^mata uang$/i, 'IDR')
+    choose(/^mata uang$/i, 'IDR')
     await waitFor(() => expect(params().get('currency')).toBe('IDR'))
 
     // Each one is a separate navigation, so none of them may clobber another.
@@ -313,14 +313,14 @@ describe('Filter selects on the summary', () => {
     })
     renderResults('?page=3')
     await waitFor(() => expect(apiMock.resultsSummary).toHaveBeenCalled())
-    choose(/^company$/i, 'ACME')
+    choose(/^perusahaan$/i, 'ACME')
 
     // Page 3 of a narrower result set would render empty, so it is dropped.
     await waitFor(() => expect(params().get('page')).toBeNull())
     expect(params().get('company')).toBe('ACME')
   })
 
-  it('records the chosen sub-sector in the URL and re-queries the summary', async () => {
+  it('records the chosen subsektor in the URL and re-queries the summary', async () => {
     renderResults()
     fireEvent.click(subsectorTrigger())
     fireEvent.click(await screen.findByLabelText(/^food \(2\)$/i))
@@ -336,7 +336,7 @@ describe('Filter selects on the summary', () => {
     )
   })
 
-  it('lets several sub-sectors be selected at once', async () => {
+  it('lets several subsektors be selected at once', async () => {
     apiMock.resultsSummary.mockResolvedValue({
       ...TWO_FIGURES,
       subsectors: [
@@ -367,7 +367,7 @@ describe('Filter selects on the summary', () => {
     })
   })
 
-  it('names the chosen sub-sector on the closed control', async () => {
+  it('names the chosen subsektor on the closed control', async () => {
     renderResults()
     fireEvent.click(subsectorTrigger())
     fireEvent.click(await screen.findByLabelText(/^food \(2\)$/i))
@@ -376,27 +376,27 @@ describe('Filter selects on the summary', () => {
     // the way a select shows its value -- field name and
     // selection together.
     expect(
-      await screen.findByRole('button', { name: /sub-sector food/i }),
+      await screen.findByRole('button', { name: /subsektor food/i }),
     ).toBeTruthy()
   })
 
-  it('clears every chosen sub-sector from the control', async () => {
+  it('clears every chosen subsektor from the control', async () => {
     renderResults()
     fireEvent.click(subsectorTrigger())
     fireEvent.click(await screen.findByLabelText(/^food \(2\)$/i))
     await waitFor(() => expect(params().get('subsector')).toBe('Food'))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Bersihkan' }))
 
     await waitFor(() => {
       expect(params().getAll('subsector')).toEqual([])
     })
     expect(
-      screen.getByRole('button', { name: /sub-sector all sub-sectors/i }),
+      screen.getByRole('button', { name: /subsektor semua subsektor/i }),
     ).toBeTruthy()
   })
 
-  it('closes the sub-sector list when the reader clicks elsewhere', async () => {
+  it('closes the subsektor list when the reader clicks elsewhere', async () => {
     renderResults()
     fireEvent.click(subsectorTrigger())
     expect(await screen.findByLabelText(/^food \(2\)$/i)).toBeTruthy()
@@ -417,13 +417,13 @@ describe('Filter selects on the summary', () => {
     renderResults()
     fireEvent.click(subsectorTrigger())
     expect(
-      await screen.findByLabelText(/^no sub-sector declared \(1\)$/i),
+      await screen.findByLabelText(/^tanpa subsektor yang dideklarasikan \(1\)$/i),
     ).toBeTruthy()
   })
 
   it('records the no-net-loss filter as a URL flag and re-queries', async () => {
     renderResults()
-    fireEvent.click(screen.getByLabelText(/^no net loss$/i))
+    fireEvent.click(screen.getByLabelText(/^laba terus$/i))
 
     await waitFor(() => {
       expect(params().get('profitable')).toBe('true')
@@ -437,11 +437,11 @@ describe('Filter selects on the summary', () => {
 
     // Switching it off must take the flag back out of the URL, or the
     // grid would stay narrowed after the box was unticked.
-    fireEvent.click(screen.getByLabelText(/^no net loss$/i))
+    fireEvent.click(screen.getByLabelText(/^laba terus$/i))
     await waitFor(() => expect(params().get('profitable')).toBeNull())
   })
 
-  it('re-queries when the sub-sector filter changes, not just the other filters', async () => {
+  it('re-queries when the subsektor filter changes, not just the other filters', async () => {
     renderResults('?subsector=Food')
     await waitFor(() => expect(apiMock.resultsSummary).toHaveBeenCalled())
     expect(apiMock.resultsSummary).toHaveBeenLastCalledWith(
@@ -460,11 +460,11 @@ describe('Amount entry', () => {
       }),
     )
     renderResults()
-    fireEvent.click(await openEditor(/edit gross profit for acme 2024/i))
+    fireEvent.click(await openEditor(/ubah laba kotor untuk acme 2024/i))
 
     const input = await amountInput()
     expect(input.value).toBe('31635083104.74')
-    fireEvent.click(screen.getByRole('button', { name: /save correction/i }))
+    fireEvent.click(screen.getByRole('button', { name: /simpan koreksi/i }))
 
     await waitFor(() => {
       expect(apiMock.updateValue).toHaveBeenCalledWith(
@@ -481,10 +481,10 @@ describe('Amount entry', () => {
       }),
     )
     renderResults()
-    fireEvent.click(await openEditor(/edit gross profit for acme 2024/i))
+    fireEvent.click(await openEditor(/ubah laba kotor untuk acme 2024/i))
 
     fireEvent.change(await amountInput(), { target: { value: '31635083104.5' } })
-    fireEvent.click(screen.getByRole('button', { name: /save correction/i }))
+    fireEvent.click(screen.getByRole('button', { name: /simpan koreksi/i }))
 
     await waitFor(() => {
       expect(apiMock.updateValue).toHaveBeenCalledWith(
@@ -501,10 +501,10 @@ describe('Amount entry', () => {
       }),
     )
     renderResults()
-    fireEvent.click(await openEditor(/edit gross profit for acme 2024/i))
+    fireEvent.click(await openEditor(/ubah laba kotor untuk acme 2024/i))
 
     fireEvent.change(await amountInput(), { target: { value: '31,635,083,104' } })
-    fireEvent.click(screen.getByRole('button', { name: /save correction/i }))
+    fireEvent.click(screen.getByRole('button', { name: /simpan koreksi/i }))
 
     await waitFor(() => {
       expect(apiMock.updateValue).toHaveBeenCalledWith(
@@ -516,9 +516,9 @@ describe('Amount entry', () => {
 
   it('clears a figure to null when the field is emptied', async () => {
     renderResults()
-    fireEvent.click(await openEditor(/edit total assets for acme 2024/i))
+    fireEvent.click(await openEditor(/ubah jumlah aset untuk acme 2024/i))
     fireEvent.change(await amountInput(), { target: { value: '' } })
-    fireEvent.click(screen.getByRole('button', { name: /save correction/i }))
+    fireEvent.click(screen.getByRole('button', { name: /simpan koreksi/i }))
 
     await waitFor(() => {
       expect(apiMock.updateValue).toHaveBeenCalledTimes(1)
@@ -533,21 +533,21 @@ describe('Amount entry', () => {
 
   it('still rejects text that is not a number', async () => {
     renderResults()
-    fireEvent.click(await openEditor(/edit total assets for acme 2024/i))
+    fireEvent.click(await openEditor(/ubah jumlah aset untuk acme 2024/i))
     fireEvent.change(await amountInput(), { target: { value: '1.2.3' } })
-    fireEvent.click(screen.getByRole('button', { name: /save correction/i }))
+    fireEvent.click(screen.getByRole('button', { name: /simpan koreksi/i }))
 
-    expect(await screen.findByText(/optional decimal part/i)).toBeTruthy()
+    expect(await screen.findByText(/desimal opsional/i)).toBeTruthy()
     expect(apiMock.updateValue).not.toHaveBeenCalled()
   })
 
   it('rejects a value past the safe integer range', async () => {
     renderResults()
-    fireEvent.click(await openEditor(/edit total assets for acme 2024/i))
+    fireEvent.click(await openEditor(/ubah jumlah aset untuk acme 2024/i))
     fireEvent.change(await amountInput(), { target: { value: '9'.repeat(400) } })
-    fireEvent.click(screen.getByRole('button', { name: /save correction/i }))
+    fireEvent.click(screen.getByRole('button', { name: /simpan koreksi/i }))
 
-    expect(await screen.findByText(/too large to be stored safely/i)).toBeTruthy()
+    expect(await screen.findByText(/terlalu besar untuk disimpan dengan aman/i)).toBeTruthy()
     expect(apiMock.updateValue).not.toHaveBeenCalled()
   })
 })

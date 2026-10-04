@@ -5,8 +5,10 @@ import { useAction, useLiveRefresh, useQuery } from '../hooks/useQuery'
 import type { QueryState } from '../hooks/useQuery'
 import { useProcessing } from '../lib/processing-context'
 import { useUrlFilters } from '../hooks/useFilters'
-import { currencyLabel, currencyOptions, num, rupiah, titleCase } from '../lib/format'
+import { currencyLabel, currencyOptions, rupiah, titleCase } from '../lib/format'
+import { fieldLabel } from '../lib/field-labels'
 import { companyPath } from '../lib/paths'
+import { results as s } from '../lib/strings'
 import type {
   ProcessingState,
   ResultsCoverage,
@@ -68,7 +70,7 @@ function parseAmount(input: string): { value: number } | { error: string } {
   if (trimmed === '') return { value: Number.NaN }
   if (!/^-?[0-9][0-9,]*(\.[0-9]+)?$/.test(trimmed)) {
     return {
-      error: 'Enter digits only, with an optional decimal part. Commas group thousands.',
+      error: 'Masukkan angka saja, dengan bagian desimal opsional. Koma mengelompokkan ribuan.',
     }
   }
   const value = Number(trimmed.replace(/,/g, ''))
@@ -76,7 +78,7 @@ function parseAmount(input: string): { value: number } | { error: string } {
   // figures this field exists to correct. The API stores `int | float`, and a
   // value past MAX_SAFE_INTEGER has already lost the digits that matter.
   if (!Number.isFinite(value) || Math.abs(value) > Number.MAX_SAFE_INTEGER) {
-    return { error: 'That number is too large to be stored safely.' }
+    return { error: 'Angka itu terlalu besar untuk disimpan dengan aman.' }
   }
   return { value }
 }
@@ -106,14 +108,14 @@ function GridCell({
   onEdit: () => void
   onAdd: () => void
 }) {
-  const where = `${label} for ${company}${year ? ` ${year}` : ''}`
+  const where = `${label} untuk ${company}${year ? ` ${year}` : ''}`
   // Figures never wrap: a broken amount is read as a different amount.
   const base = `whitespace-nowrap ${className}`
 
   if (!cell) {
     if (!canAdd) {
       return (
-        <Td align="right" className={`tnum text-muted-foreground/40 ${base}`} title={`No ${label} was found`}>
+        <Td align="right" className={`tnum text-muted-foreground/40 ${base}`} title={`Tidak ada ${label} yang ditemukan`}>
           &mdash;
         </Td>
       )
@@ -123,15 +125,15 @@ function GridCell({
         <button
           type="button"
           onClick={onAdd}
-          title={`Add ${where}`}
-          aria-label={`Add ${where}`}
+          title={`Tambah ${where}`}
+          aria-label={`Tambah ${where}`}
           className="tnum group inline-flex items-center gap-1 rounded-md border border-dashed border-border px-1.5 py-0.5 text-sm text-muted-foreground/70 transition-colors hover:border-primary hover:bg-accent hover:text-primary"
         >
           <span aria-hidden className="text-xs leading-none">
             +
           </span>
           <span className="text-[0.65rem] font-sans font-semibold uppercase tracking-wide">
-            add
+            tambah
           </span>
         </button>
       </Td>
@@ -142,22 +144,22 @@ function GridCell({
       <button
         type="button"
         onClick={onEdit}
-        title={`Edit ${where}`}
-        aria-label={`Edit ${where}`}
+        title={`Ubah ${where}`}
+        aria-label={`Ubah ${where}`}
         className="tnum -mr-1 inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 font-mono text-sm font-semibold text-foreground hover:bg-accent hover:text-primary"
       >
         {rupiah(cell.normalized_value)}
         {cell.is_edited && (
           <span className="rounded bg-accent px-1 text-[0.6rem] font-sans font-semibold uppercase tracking-wide text-accent-foreground">
-            edited
+            diubah
           </span>
         )}
         {cell.disputed && (
           <span
             className="rounded bg-danger-soft px-1 text-[0.6rem] font-sans font-bold uppercase tracking-wide text-danger-soft-foreground"
-            title="Two readings of this figure disagree. Click to compare them."
+            title="Dua pembacaan angka ini tidak sepakat. Klik untuk membandingkannya."
           >
-            disputed
+            dipersengketakan
           </span>
         )}
         {/* The pencil is a hover affordance, not a permanent fixture: one per
@@ -248,11 +250,11 @@ function CellForm({
     }
 
     if (Number.isNaN(parsed.value)) {
-      setError('Enter the figure to add.')
+      setError('Masukkan angka yang ditambahkan.')
       return
     }
     if (documentId === null) {
-      setError('Choose which report this figure belongs to.')
+      setError('Pilih laporan angka ini berasal.')
       return
     }
     void saveNew
@@ -282,22 +284,22 @@ function CellForm({
         <form onSubmit={submit} className="flex flex-col gap-3">
           <div className="text-xs text-muted-foreground">
             <span className="font-semibold text-foreground">
-              {mode === 'edit' ? 'Correcting' : 'Adding'} {label}
+              {mode === 'edit' ? 'Mengoreksi' : 'Menambahkan'} {label}
             </span>{' '}
-            for {company}
+            untuk {company}
             {year ? ` ${year}` : ''}
             {mode === 'edit' && cell?.extraction_method === 'manual' && (
-              <> — this figure was entered by hand, so there is no extractor's reading to revert to.</>
+              <>{s.editor.addManualNote}</>
             )}
           </div>
 
           <div className="flex flex-wrap items-end gap-3">
             <Input
               ref={amountRef}
-              label={mode === 'edit' ? 'Corrected amount (full rupiah)' : 'Amount (full rupiah)'}
+              label={s.editor.amountLabel(mode)}
               hint={
                 mode === 'edit' && cell?.normalized_value != null
-                  ? `Currently ${rupiah(cell.normalized_value)}. Clear the field to leave it empty.`
+                  ? s.editor.currentHint(rupiah(cell.normalized_value))
                   : undefined
               }
               className="tnum w-56 font-mono"
@@ -315,11 +317,11 @@ function CellForm({
 
             {mode === 'add' && documents.length > 1 && (
               <Select
-                label="Report"
+                label={s.editor.report}
                 className="w-64"
                 options={documents.map((d) => ({
                   value: String(d.id),
-                  label: d.filename ?? `Document ${d.id}`,
+                  label: d.filename ?? s.editor.documentFallback(d.id),
                 }))}
                 value={documentId === null ? '' : String(documentId)}
                 onChange={(e) => setDocumentId(Number(e.target.value))}
@@ -327,12 +329,12 @@ function CellForm({
             )}
 
             <Input
-              label="Why (optional)"
-              hint="Kept on the row so the change is auditable later."
+              label={s.editor.reason}
+              hint={s.editor.reasonHint}
               className="w-64"
               value={note}
               onChange={(e) => setNote(e.target.value)}
-              placeholder="e.g. mis-scaled on the highlights page"
+              placeholder={s.editor.reasonPlaceholder}
               maxLength={200}
             />
           </div>
@@ -355,10 +357,10 @@ function CellForm({
 
           <div className="flex flex-wrap items-center gap-2">
             <Button type="submit" variant="primary" size="sm" pending={saveValue.pending || saveNew.pending}>
-              {mode === 'edit' ? 'Save correction' : 'Add figure'}
+              {s.editor.save(mode)}
             </Button>
             <Button type="button" variant="secondary" size="sm" onClick={onDone}>
-              Cancel
+              Batal
             </Button>
             {reverting && (
               <Button
@@ -372,12 +374,12 @@ function CellForm({
                   })
                 }
               >
-                Revert to {rupiah(cell?.original_value ?? null)}
+                {s.editor.revertTo(rupiah(cell?.original_value ?? null))}
               </Button>
             )}
             {mode === 'add' && filename && (
               <span className="text-xs text-muted-foreground">
-                Filed under {filename}. Kept even if the report is processed again.
+                {s.editor.filedUnder(filename)}
               </span>
             )}
           </div>
@@ -419,13 +421,15 @@ function CoverageNotice({ query }: { query: QueryState<ResultsCoverage> | null }
     // light-mode colours and stay pale-on-pale under a dark theme.
     <div className="mt-4 rounded-lg border border-warning-soft bg-warning-soft p-3 text-sm text-warning-soft-foreground">
       <p className="font-semibold">
-        Showing {data.companies_with_values} of {data.companies_discovered} companies
+        {s.coverage.showing(data.companies_with_values, data.companies_discovered)}
       </p>
       <p className="mt-1">
-        {data.companies_without_values} companies have no figures yet because their
-        reports have not been read: {documents_with_values} of {documents_total} documents
-        produced data ({breakdown}). They are missing from the grid below because
-        nothing has been extracted, not because the filings are absent.
+        {s.coverage.missing(
+          data.companies_without_values,
+          documents_with_values,
+          documents_total,
+          breakdown,
+        )}
       </p>
       {start.error && (
         <p className="mt-2 text-xs text-danger-soft-foreground">{start.error}</p>
@@ -438,7 +442,7 @@ function CoverageNotice({ query }: { query: QueryState<ResultsCoverage> | null }
           pending={start.pending}
           onClick={() => start.run()}
         >
-          {start.pending ? 'Starting...' : 'Process remaining documents'}
+          {start.pending ? s.coverage.starting : s.coverage.processRemaining}
         </Button>
         {/* The dashboard is where batch progress lives; /processing is not a
             route, and linking to it landed on the not-found page. */}
@@ -446,11 +450,11 @@ function CoverageNotice({ query }: { query: QueryState<ResultsCoverage> | null }
           to="/"
           className="text-xs font-medium underline underline-offset-2"
         >
-          Watch progress on the dashboard
+          {s.coverage.watchProgress}
         </Link>
         <details>
           <summary className="cursor-pointer text-xs">
-            Show the {data.companies_without_values} companies
+            {s.coverage.showCompanies(data.companies_without_values)}
           </summary>
           <ul className="mt-1 max-h-40 list-inside list-disc overflow-y-auto text-xs">
             {data.missing.map((m) => (
@@ -462,7 +466,7 @@ function CoverageNotice({ query }: { query: QueryState<ResultsCoverage> | null }
                   {m.company}
                 </Link>{' '}
                 <span className="opacity-70">
-                  ({m.documents} doc{m.documents === 1 ? '' : 's'})
+                  ({s.coverage.docs(m.documents)})
                 </span>
               </li>
             ))}
@@ -504,12 +508,10 @@ function CompanySources({
         <div className="grid gap-4 py-1 text-xs md:grid-cols-2">
           <div>
             <p className="font-semibold text-foreground">
-              Source reports ({documents.length})
+              {s.sources.title(documents.length)}
             </p>
             {documents.length === 0 ? (
-              <p className="text-muted-foreground">
-                No report is linked to these figures.
-              </p>
+              <p className="text-muted-foreground">{s.sources.none}</p>
             ) : (
               <ul className="mt-1 space-y-0.5">
                 {documents.map((d) => (
@@ -518,7 +520,7 @@ function CompanySources({
                       to={`/documents/${d.id}`}
                       className="font-medium text-primary underline-offset-2 hover:underline"
                     >
-                      {d.filename ?? `Report ${d.id}`}
+                      {d.filename ?? s.sources.reportFallback(d.id)}
                     </Link>
                     {d.statements.length > 0 && (
                       <span className="text-muted-foreground">
@@ -530,26 +532,23 @@ function CompanySources({
               </ul>
             )}
             <p className="mt-2 text-muted-foreground">
-              Reporting currency: {currency ?? 'not stated'} &middot; figures are for{' '}
-              {year ?? 'an undated report'}.
+              {s.sources.currencyLine(
+                currency ?? s.sources.notStated,
+                year !== null ? String(year) : s.sources.undated,
+              )}
             </p>
           </div>
 
           <div>
             <p className="font-semibold text-foreground">
-              Checks that did not hold ({entries.length})
+              {s.sources.checksTitle(entries.length)}
             </p>
             {entries.length === 0 ? (
-              <p className="text-muted-foreground">
-                Every accounting identity the pipeline could test for this
-                company-year held. Checks that could not be run are reported as
-                &ldquo;not enough data&rdquo; and are not failures.
-              </p>
+              <p className="text-muted-foreground">{s.sources.allHeld}</p>
             ) : (
               <>
                 <p className="mt-1 text-muted-foreground">
-                  These figures are known not to reconcile. At least one number
-                  in each identity below is wrong; the checks cannot say which.
+                  {s.sources.notReconciled}
                 </p>
                 <ul className="mt-1 space-y-0.5">
                   {entries.map(([check, severity]) => (
@@ -613,7 +612,7 @@ function DisputeChooser({
   const pending = save.pending || create.pending
   const error = save.error ?? create.error
   const candidates = cell?.candidates ?? []
-  const where = `${label} for ${company}${year ? ` ${year}` : ''}`
+  const where = `${label} untuk ${company}${year ? ` ${year}` : ''}`
 
   const accept = () => {
     if (picked) save.run({ normalized_value: picked.normalized_value }).then(onDone)
@@ -624,24 +623,21 @@ function DisputeChooser({
       <Td colSpan={colSpan} className="bg-warning-soft">
         <div className="py-1 text-xs">
           <p className="font-semibold text-foreground">
-            {candidates.length} readings of {where} disagree
+            {s.dispute.title(candidates.length, where)}
           </p>
-          <p className="mt-0.5 text-muted-foreground">
-            The grid will not pick one for you. Higher extractor confidence
-            does not mean more correct here -- on these statements the
-            mis-scaled reading often scores higher. Choose the reading that
-            matches the source, or close this and type the figure instead.
-          </p>
+          <p className="mt-0.5 text-muted-foreground">{s.dispute.hint}</p>
 
           <div className="mt-2 overflow-x-auto">
             <table className="w-full text-left">
               <thead>
                 <tr className="text-[0.65rem] uppercase tracking-wide text-muted-foreground">
-                  <th className="py-1 pr-3 font-semibold">Value</th>
-                  <th className="py-1 pr-3 font-semibold">Raw text</th>
-                  <th className="py-1 pr-3 font-semibold">Report</th>
-                  <th className="py-1 pr-3 font-semibold">Page</th>
-                  <th className="py-1 pr-3 font-semibold">Confidence</th>
+                  <th className="py-1 pr-3 font-semibold">{s.dispute.value}</th>
+                  <th className="py-1 pr-3 font-semibold">{s.dispute.rawText}</th>
+                  <th className="py-1 pr-3 font-semibold">{s.dispute.report}</th>
+                  <th className="py-1 pr-3 font-semibold">{s.dispute.page}</th>
+                  <th className="py-1 pr-3 font-semibold">
+                    {s.dispute.confidence}
+                  </th>
                   <th className="py-1 font-semibold"></th>
                 </tr>
               </thead>
@@ -675,7 +671,7 @@ function DisputeChooser({
                           className="rounded-md border border-border px-2 py-0.5 font-medium hover:border-primary hover:bg-accent hover:text-primary"
                           onClick={() => setPicked(c)}
                         >
-                          {picked?.id === c.id ? 'Selected' : 'Use this'}
+                          {picked?.id === c.id ? s.dispute.selected : s.dispute.useThis}
                         </button>
                       </td>
                     </tr>
@@ -687,7 +683,7 @@ function DisputeChooser({
 
           {error && (
             <p className="mt-2 text-xs text-danger-soft-foreground">
-              {typeof error === 'string' ? error : 'Could not save.'}
+              {typeof error === 'string' ? error : s.dispute.couldNotSave}
             </p>
           )}
 
@@ -698,19 +694,18 @@ function DisputeChooser({
               onClick={accept}
               className="rounded-md bg-primary px-3 py-1 font-medium text-primary-foreground disabled:opacity-50"
             >
-              {pending ? 'Saving...' : 'Accept this reading'}
+              {pending ? s.dispute.saving : s.dispute.accept}
             </button>
             <button
               type="button"
               onClick={onDone}
               className="text-muted-foreground underline-offset-2 hover:underline"
             >
-              Close
+              {s.dispute.close}
             </button>
             {picked && (
               <span className="text-muted-foreground">
-                Recorded as a hand correction, so it wins from now on and the
-                extractor reading is kept for audit.
+                {s.dispute.recordedAsManual}
               </span>
             )}
           </div>
@@ -757,14 +752,13 @@ function LiveProcessingBanner({
   if (!running) {
     return (
       <Alert tone="info" className="mb-3">
-        Batch stopped. Documents already being read finished and were saved;
-        the rest are still queued.
+        {s.processing.stopped}
         <button
           type="button"
           className="ml-2 underline underline-offset-2"
           onClick={() => setJustStopped(false)}
         >
-          Dismiss
+          {s.processing.dismiss}
         </button>
       </Alert>
     )
@@ -777,13 +771,11 @@ function LiveProcessingBanner({
       <span className="flex-1">
         {stopping ? (
           <>
-            <strong>Stopping...</strong> Documents already being read finish
-            first, then the queue is dropped. Nothing is lost.
+            <strong>{s.processing.stopping}</strong> {s.processing.stoppingHint}
           </>
         ) : (
           <>
-            <strong>Processing in the background.</strong> This grid updates as
-            each report is read.
+            <strong>{s.processing.running}</strong> {s.processing.runningHint}
           </>
         )}
       </span>
@@ -795,7 +787,7 @@ function LiveProcessingBanner({
         disabled={stopping}
         onClick={() => stop.run()}
       >
-        {stopping || stop.pending ? 'Stopping...' : 'Stop'}
+        {stopping || stop.pending ? s.processing.stopping : s.processing.stop}
       </Button>
     </Alert>
   )
@@ -827,8 +819,8 @@ function SummaryExport({
       aria-disabled={empty || undefined}
       title={
         empty
-          ? 'Nothing to export: no company-years match the current filters.'
-          : `Download all ${num(rowCount)} rows as an .xlsx, every page, with a sheet explaining the blanks and the currencies`
+          ? s.grid.exportNothingTitle
+          : s.grid.exportTitle(rowCount)
       }
     >
       <svg
@@ -845,7 +837,7 @@ function SummaryExport({
           strokeLinejoin="round"
         />
       </svg>
-      Export to Excel
+      {s.grid.export}
     </ButtonLink>
   )
 }
@@ -943,26 +935,26 @@ function SummaryGrid({
       <LiveProcessingBanner job={job} onChanged={refresh} />
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 lg:max-w-4xl">
         <Select
-          label="Company"
+          label={s.grid.company}
           options={[
-            { value: '', label: 'All companies' },
+            { value: '', label: s.grid.allCompanies },
             ...companies.map((c) => ({ value: c.company, label: c.company })),
           ]}
           value={values.company}
           onChange={(e) => setParam('company', e.target.value)}
         />
         <Select
-          label="Year"
+          label={s.grid.year}
           options={[
-            { value: '', label: 'All years' },
+            { value: '', label: s.grid.allYears },
             ...years.map((y) => ({ value: y, label: y })),
           ]}
           value={values.year}
           onChange={(e) => setParam('year', e.target.value)}
         />
         <Select
-          label="Currency"
-          hint="Reporting currency found in the source. 'Not detected' means no currency was found, not that it is rupiah."
+          label={s.grid.currency}
+          hint={s.grid.currencyHint}
           // Prefer the summary's own list, which only offers currencies the
           // displayed columns can match; fall back to the global facets so the
           // control is never empty.
@@ -979,16 +971,16 @@ function SummaryGrid({
             of zero, so a ticked option never vanishes while the query
             is still narrowed by it. */}
         <MultiSelect
-          label="Sub-sector"
-          hint="The business classification the filing declares on its cover. One per company; pick several to compare them."
-          placeholder="All sub-sectors"
-          options={(data?.subsectors ?? []).map((s) => ({
-            value: s.subsector,
+          label={s.grid.subsector}
+          hint={s.grid.subsectorHint}
+          placeholder={s.grid.allSubsectors}
+          options={(data?.subsectors ?? []).map((sub) => ({
+            value: sub.subsector,
             label:
-              s.subsector === 'none'
-                ? 'No sub-sector declared'
-                : s.subsector,
-            count: s.count,
+              sub.subsector === 'none'
+                ? s.grid.noSubsectorDeclared
+                : sub.subsector,
+            count: sub.count,
           }))}
           values={selectedSubsectors}
           onChange={(picked) => setParam('subsector', picked)}
@@ -999,8 +991,8 @@ function SummaryGrid({
             drops the rest -- including years with no profit figure at all,
             because a missing number is not evidence of a profit. */}
         <Checkbox
-          label="No net loss"
-          hint="Only company-years that reported a profit. Years that lost money, or show no profit figure, are left out."
+          label={s.grid.noNetLoss}
+          hint={s.grid.noNetLossHint}
           checked={profitable}
           onChange={(e) =>
             setParam('profitable', e.target.checked ? 'true' : '')
@@ -1023,21 +1015,20 @@ function SummaryGrid({
           <SkeletonTable rows={8} cols={6} />
         ) : !data || data.items.length === 0 ? (
           <EmptyState
-            title="No company-years match"
-            hint="Adjust the filters, or process more documents from the dashboard."
+            title={s.grid.noMatchTitle}
+            hint={s.grid.noMatchHint}
           />
         ) : (
           <Card
             padded={false}
             subtitle={
               data
-                ? `${num(data.pagination.total)} company-year${
-                    data.pagination.total === 1 ? '' : 's'
-                  } · ${data.fields.length} figure${data.fields.length === 1 ? '' : 's'}${
-                    data.pagination.pages > 1
-                      ? ` · page ${data.pagination.page} of ${data.pagination.pages}`
-                      : ''
-                  }`
+                ? s.grid.summary(
+                    data.pagination.total,
+                    data.fields.length,
+                    data.pagination.page,
+                    data.pagination.pages,
+                  )
                 : undefined
             }
             actions={
@@ -1047,17 +1038,19 @@ function SummaryGrid({
               />
             }
           >
-            <Table caption="Results summary by company and year" stickyHeader>
+            <Table caption={s.grid.caption} stickyHeader>
               <thead>
                 <tr>
                   {/* Pinned: the figure columns are what scroll off, and a
                       number with no company beside it cannot be read. The
                       background is restated because a sticky cell is lifted out
                       of the row's own background. */}
-                  <Th className="sticky left-0 z-20 bg-muted">Company</Th>
-                  <Th>Year</Th>
-                  <Th hideBelow="lg">Currency</Th>
-                  <Th>Sub-sector</Th>
+                  <Th className="sticky left-0 z-20 bg-muted">
+                    {s.grid.company}
+                  </Th>
+                  <Th>{s.grid.year}</Th>
+                  <Th hideBelow="lg">{s.grid.currency}</Th>
+                  <Th>{s.grid.subsector}</Th>
                   {data.fields.map((field, i) => (
                     <Th
                       key={field}
@@ -1066,7 +1059,7 @@ function SummaryGrid({
                       // edge of the identity block on a wide table.
                       className={i === 0 ? 'border-l border-border' : ''}
                     >
-                      {data.labels[field] ?? titleCase(field)}
+                      {fieldLabel(field, data.labels[field])}
                     </Th>
                   ))}
                 </tr>
@@ -1115,7 +1108,7 @@ function SummaryGrid({
                               type="button"
                               className="mt-0.5 shrink-0 rounded text-muted-foreground hover:text-foreground"
                               aria-expanded={detailsOpen}
-                              title="Source documents and checks for this company"
+                              title={s.grid.sourceDetailsTitle}
                               onClick={() =>
                                 setExpandedRow(detailsOpen ? null : rowKey)
                               }
@@ -1129,19 +1122,21 @@ function SummaryGrid({
                               <Link
                                 to={companyPath(row.company)}
                                 className="block truncate font-medium text-foreground underline-offset-2 hover:underline"
-                                title={`Open the profile for ${row.company}`}
+                                title={s.grid.openProfile(row.company)}
                               >
                                 {row.company}
                               </Link>
                               {failed.length > 0 && (
                                 <span
                                   className="mt-0.5 block cursor-help"
-                                  title={`These figures do not reconcile: ${failed
-                                    .map((c) => titleCase(c))
-                                    .join(', ')}. The pipeline ran these checks and they did not hold.`}
+                                  title={s.grid.notReconciling(
+                                    failed
+                                      .map((c) => titleCase(c))
+                                      .join(', '),
+                                  )}
                                 >
                                   <Badge tone="danger">
-                                    {failed.length} check{failed.length === 1 ? '' : 's'} failed
+                                    {s.grid.checksFailed(failed.length)}
                                   </Badge>
                                 </span>
                               )}
@@ -1153,13 +1148,13 @@ function SummaryGrid({
                           {row.currency === null ? (
                             <span className="text-muted-foreground/60">&mdash;</span>
                           ) : row.currency === 'Mixed' ? (
-                            <Badge tone="warning">Mixed</Badge>
+                            <Badge tone="warning">{s.grid.mixed}</Badge>
                           ) : row.currency === 'Not detected' ? (
                             <span
                               className="text-muted-foreground"
-                              title="No currency was found in the source for these figures."
+                              title={s.grid.notDetectedHint}
                             >
-                              Not detected
+                              {s.grid.notDetected}
                             </span>
                           ) : (
                             <span title={currencyLabel(row.currency)}>
@@ -1182,7 +1177,7 @@ function SummaryGrid({
                             <GridCell
                               key={field}
                               cell={cell}
-                              label={data.labels[field] ?? titleCase(field)}
+                              label={fieldLabel(field, data.labels[field])}
                               company={row.company}
                               year={row.year}
                               canAdd={rowDocuments.length > 0}
@@ -1235,7 +1230,7 @@ function SummaryGrid({
                             cell={open.cell}
                             company={open.company}
                             year={open.year}
-                            label={data.labels[open.field] ?? titleCase(open.field)}
+                            label={fieldLabel(open.field, data.labels[open.field])}
                             documents={rowDocuments}
                             onDone={() => {
                               setActiveCell(null)
@@ -1251,7 +1246,7 @@ function SummaryGrid({
                             company={open.company}
                             year={open.year}
                             field={open.field}
-                            label={data.labels[open.field] ?? titleCase(open.field)}
+                            label={fieldLabel(open.field, data.labels[open.field])}
                             documents={rowDocuments}
                             onDone={() => {
                               setActiveCell(null)
@@ -1289,20 +1284,19 @@ export default function Results() {
   return (
     <>
       <PageHeader
-        title="Results"
-        subtitle="Headline figures per company-year. Click any amount to correct it."
+        title={s.title}
+        subtitle={s.subtitle}
       />
 
       <Alert tone="info" className="mb-4">
-        Corrections keep the extractor&apos;s original reading alongside them, and{' '}
-        <strong>Revert</strong> puts it back. Corrections survive re-processing,
-        but a document&apos;s validation checks are not recomputed automatically.
+        {s.correctionsNote.lead}{' '}
+        <strong>{s.correctionsNote.revert}</strong> {s.correctionsNote.tail}
       </Alert>
 
       {activeCount > 0 && (
         <div className="mb-3 flex justify-end">
           <Button size="sm" variant="ghost" onClick={clearAll}>
-            Clear {activeCount} filter{activeCount === 1 ? '' : 's'}
+            {s.clearFilters(activeCount)}
           </Button>
         </div>
       )}

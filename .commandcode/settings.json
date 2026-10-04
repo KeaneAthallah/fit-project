@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Shell(git:*)",
+      "powershell",
+      "Shell(python -m pytest tests/test_results_summary.py -q 2 >& 1)",
+      "Shell(powershell -NoProfile -Command \"Get-ChildItem -Path 'C:\\Users\\kenn\\Documents\\Fitri\\data' -Recurse -Include *.csv,*.json,*.html -ErrorAction SilentlyContinue | Select-Object -First 10 | ForEach-Object { $_.FullName }\")",
+      "Shell(powershell -NoProfile -Command \"$vals = @{}; Get-ChildItem -Path 'C:\\Users\\kenn\\Documents\\Fitri\\data\\extracted' -Recurse -Filter extraction.json | ForEach-Object { $j = Get-Content $_.FullName -Raw | ConvertFrom-Json; foreach ($v in $j.values) { if ($v.field -eq 'sub_sector' -and $v.text_value) { $vals[$v.text_value] = $true } } }; $vals.Keys | Sort-Object\")",
+      "Shell(agent-browser:*)"
+    ],
+    "deny": [],
+    "defaultMode": "default"
+  }
+}

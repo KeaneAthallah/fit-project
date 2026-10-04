@@ -1004,7 +1004,7 @@ def _summary_scope(
     company: str | None,
     year: int | None,
     currency: str | None,
-    subsector: str | None = None,
+    subsector: list[str] | None = None,
     profitable: bool = False,
 ) -> tuple[
     list[dict[str, Any]], list[str], dict[str, str],
@@ -1037,18 +1037,25 @@ def _summary_scope(
     # of the grid's columns: it travels as an attribute of the row. Every figure
     # below keeps the same "one winner per company-year" rule so that a filter
     # and the number shown beside it can never disagree about which reading won.
-    subsector_readings: dict[tuple[str, int | None], list[ExtractedValue]] = {}
     profit_readings: dict[tuple[str, int | None], list[ExtractedValue]] = {}
     for v in scoped:
-        if v.field == "sub_sector":
-            if (v.text_value or "").strip():
-                subsector_readings.setdefault((v.company, v.year), []).append(v)
-        elif v.field == PROFIT_FIELD:
+        if v.field == PROFIT_FIELD:
             profit_readings.setdefault((v.company, v.year), []).append(v)
 
+    # A company has ONE sub-sector -- the IDX classification it was listed
+    # under -- not one per year. It is therefore resolved from every value the
+    # company has, not only the years on screen: a 2023 filing that never
+    # printed the classification still belongs to the sector the 2024 cover
+    # declared. Resolving it from `values` rather than `scoped` also keeps the
+    # column and the filter independent of the year filter.
+    subsector_readings: dict[str, list[ExtractedValue]] = {}
+    for v in values:
+        if v.field == "sub_sector" and (v.text_value or "").strip():
+            subsector_readings.setdefault(v.company, []).append(v)
+
     subsector_of = {
-        key: (min(vs, key=_summary_rank).text_value or "").strip()
-        for key, vs in subsector_readings.items()
+        comp: (min(vs, key=_summary_rank).text_value or "").strip()
+        for comp, vs in subsector_readings.items()
     }
     # Resolved independently of `columns`: the filter asks "was this year
     # profitable", which is true whether or not the reader chose to display the
@@ -1133,7 +1140,7 @@ def _summary_scope(
             "company": comp,
             "year": yr,
             "currency": _row_currency(cells),
-            "subsector": subsector_of.get((comp, yr)),
+            "subsector": subsector_of.get(comp),
             "cells": cells,
             # A value must belong to a document, so an empty cell needs a target.
             "documents": [
@@ -1165,21 +1172,27 @@ def _summary_scope(
     for r in rows:
         key = r["subsector"] or SUB_NONE
         subsector_counts[key] = subsector_counts.get(key, 0) + 1
-    if subsector:
-        wanted = subsector.strip()
-        if wanted.lower() == SUB_NONE:
-            rows = [r for r in rows if not r["subsector"]]
-        else:
-            rows = [
-                r for r in rows
-                if (r["subsector"] or "").strip().lower() == wanted.lower()
-            ]
-        # The filter in force stays in the list even at zero, for the reason the
-        # currency list does the same: a <select> renders as its first option
-        # when its value is missing, which would show "All sub-sectors" while the
-        # query still narrowed the table.
-        if not any(k.lower() == wanted.lower() for k in subsector_counts):
-            subsector_counts[wanted if wanted.lower() != SUB_NONE else SUB_NONE] = 0
+    wanted = [w.strip() for w in (subsector or []) if w.strip()]
+    if wanted:
+        wanted_lower = {w.lower() for w in wanted}
+        # The undeclared bucket is pickable alongside real sectors: a reader
+        # comparing industries often wants the unclassified rows too.
+        include_none = SUB_NONE in wanted_lower
+        rows = [
+            r for r in rows
+            if (include_none and not r["subsector"])
+            or (
+                bool(r["subsector"])
+                and r["subsector"].strip().lower() in wanted_lower
+            )
+        ]
+        # A selection the other filters have emptied stays in the list at a
+        # count of zero, for the reason the currency list does the same: a
+        # checkbox that vanishes reads as "not applicable" while the query
+        # still narrows the table.
+        for w in wanted:
+            if not any(k.lower() == w.lower() for k in subsector_counts):
+                subsector_counts[w if w.lower() != SUB_NONE else SUB_NONE] = 0
     subsectors = [{"subsector": k, "count": n}
                   for k, n in sorted(subsector_counts.items())]
 
@@ -1195,7 +1208,7 @@ def results_summary(
     company: str | None = None,
     year: int | None = None,
     currency: str | None = None,
-    subsector: str | None = None,
+    subsector: list[str] = Query([]),
     profitable: bool = False,
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=500),
@@ -1221,7 +1234,7 @@ def results_summary_export(
     company: str | None = None,
     year: int | None = None,
     currency: str | None = None,
-    subsector: str | None = None,
+    subsector: list[str] = Query([]),
     profitable: bool = False,
 ) -> Response:
     """The summary grid as a workbook, filtered exactly as the screen is.
@@ -1242,8 +1255,8 @@ def results_summary_export(
     applied: dict[str, Any] = {
         k: v for k, v in
         (("company", company), ("year", year), ("currency", currency),
-         ("subsector", subsector))
-        if v not in (None, "")
+         ("subsector", "; ".join(subsector) if subsector else None))
+        if v
     }
     if profitable:
         applied["profitable"] = "no net loss"

@@ -70,6 +70,13 @@ def client(tmp_path, monkeypatch):
                 _value(repo, doc, "total_assets", 1_000_000.0, page=5),
                 _value(repo, doc, "total_equity", 600_000.0, page=5),
                 _value(repo, doc, "sales_and_revenue", 800_000.0, page=7),
+                # The IDX classification, verbatim: not a figure, so it
+                # rides on text_value and must never become a column or
+                # be coerced to a number.
+                {
+                    **_value(repo, doc, "sub_sector", None),
+                    "text_value": "D2. Food & Beverage",
+                },
                 # Same company, one year earlier.
                 _value(repo, doc, "total_assets", 900_000.0, year=2023, page=5),
                 # A USD report, in a field the summary grid does not show. The
@@ -100,7 +107,18 @@ def client(tmp_path, monkeypatch):
         doc3, _ = repo.upsert_document(
             str(tmp_path / "c.pdf"), "hash-c", "PT CCC Tbk", "c.pdf"
         )
-        repo.replace_values(doc3, [_value(repo, doc3, "sales", 300_000.0)])
+        repo.replace_values(
+            doc3,
+            [
+                _value(repo, doc3, "sales", 300_000.0),
+                # A second classification, so a reader can tick more
+                # than one sector at once.
+                {
+                    **_value(repo, doc3, "sub_sector", None),
+                    "text_value": "11. Crops",
+                },
+            ],
+        )
 
         # Registered but never read: no extracted values at all. This is the
         # state most of a fresh scan is in, and the reason a company can be
@@ -471,6 +489,125 @@ def test_currency_filter_is_case_insensitive(client):
     )["items"]
 
 
+def test_the_subsector_filter_narrows_the_grid(client):
+    """The declared classification is a filter like any other, and
+    the option list is scoped the way the currencies are: only what
+    the other filters can still reach."""
+    body = _rows(client, subsector="D2. Food & Beverage")
+    assert {r["company"] for r in body["items"]} == {"PT AAA Tbk"}
+    assert {s["subsector"] for s in body["subsectors"]} == {
+        "D2. Food & Beverage",
+        "11. Crops",
+        "none",
+    }
+
+
+def test_the_undeclared_subsector_is_its_own_bucket(client):
+    """A company that prints no classification on any filing is not the
+    empty string, and must not be conflated with a sector literally
+    named "none"."""
+    body = _rows(client, subsector="none")
+    keys = {(r["company"], r["year"]) for r in body["items"]}
+    assert ("PT BBB Tbk", 2024) in keys
+    assert ("PT BBB Tbk", None) in keys
+    # The other two companies declare a classification on some filing,
+    # so none of their rows are unclassified.
+    assert ("PT AAA Tbk", 2024) not in keys
+    assert ("PT CCC Tbk", 2024) not in keys
+
+
+def test_the_undeclared_bucket_can_be_picked_alongside_real_sectors(client):
+    body = _rows(client, subsector=["none", "D2. Food & Beverage"])
+    assert {r["company"] for r in body["items"]} == {"PT AAA Tbk", "PT BBB Tbk"}
+
+
+def test_the_subsector_filter_accepts_several_selections(client):
+    """Selections travel as repeated parameters rather than one joined
+    string, because a classification can itself contain a comma --
+    "43. Textile, Garment" is a real IDX code."""
+    body = _rows(client, subsector=["D2. Food & Beverage", "11. Crops"])
+    assert {r["company"] for r in body["items"]} == {"PT AAA Tbk", "PT CCC Tbk"}
+    # Every selection is still offered, scoped like the currency list.
+    assert {s["subsector"] for s in body["subsectors"]} == {
+        "D2. Food & Beverage",
+        "11. Crops",
+        "none",
+    }
+
+
+def test_the_subsector_travels_with_the_row(client):
+    body = _rows(client)
+    aaa = next(r for r in body["items"] if (r["company"], r["year"]) == ("PT AAA Tbk", 2024))
+    assert aaa["subsector"] == "D2. Food & Beverage"
+    # Stated as filed, not retitled: the classification is a code.
+    bbb = next(r for r in body["items"] if r["company"] == "PT BBB Tbk")
+    assert bbb["subsector"] is None
+    ccc = next(r for r in body["items"] if r["company"] == "PT CCC Tbk")
+    assert ccc["subsector"] == "11. Crops"
+
+
+def test_the_subsector_belongs_to_the_company_not_the_year(client):
+    """A company has one classification, not one per filing year. The
+    2023 report never printed it, yet the row still carries it -- a
+    sector is not something a company changes between reports."""
+    body = _rows(client, year=2023)
+    assert len(body["items"]) == 1
+    assert body["items"][0]["subsector"] == "D2. Food & Beverage"
+
+
+def test_the_no_net_loss_filter_keeps_only_profitable_years(client, tmp_path):
+    """A year that lost money is dropped, and so is a year with no
+    profit figure at all: no loss is not evidence of a profit."""
+    Session = get_session_factory(
+        get_engine(client.app.dependency_overrides[get_config]())
+    )
+    with Session() as s:
+        repo = Repository(s)
+        doc, _ = repo.upsert_document(
+            str(tmp_path / "p.pdf"), "hash-p", "PT PROFIT Tbk", "p.pdf"
+        )
+        repo.replace_values(
+            doc,
+            [
+                _value(repo, doc, "total_profit_loss", 50_000.0, year=2024),
+                _value(repo, doc, "total_profit_loss", -10_000.0, year=2023),
+            ],
+        )
+
+    kept = {
+        (r["company"], r["year"]) for r in _rows(client, profitable=True)["items"]
+    }
+    assert ("PT PROFIT Tbk", 2024) in kept
+    assert ("PT PROFIT Tbk", 2023) not in kept
+    # The fixture holds no profit figures, so none of it counts as
+    # healthy -- a missing number is not a clean year.
+    assert ("PT AAA Tbk", 2024) not in kept
+
+
+def test_the_no_net_loss_filter_narrows_the_export_too(client, tmp_path):
+    Session = get_session_factory(
+        get_engine(client.app.dependency_overrides[get_config]())
+    )
+    with Session() as s:
+        repo = Repository(s)
+        doc, _ = repo.upsert_document(
+            str(tmp_path / "p.pdf"), "hash-p", "PT PROFIT Tbk", "p.pdf"
+        )
+        repo.replace_values(
+            doc,
+            [
+                _value(repo, doc, "total_profit_loss", 50_000.0, year=2024),
+                _value(repo, doc, "total_profit_loss", -10_000.0, year=2023),
+            ],
+        )
+
+    wb = _workbook(_export(client, profitable=True))
+    assert [r[0] for r in _sheet_rows(wb["Summary"])] == ["PT PROFIT Tbk"]
+    # The filter the file was taken under is recorded in it.
+    text = "\n".join(str(c.value) for r in wb["Notes"].iter_rows() for c in r if c.value)
+    assert "no net loss" in text
+
+
 def test_coverage_names_the_companies_that_have_not_been_read(client):
     """The gap must be stated, not left as a silent omission.
 
@@ -775,8 +912,8 @@ class TestExcelExport:
         wb = _workbook(_export(client))
         assert wb.sheetnames[0] == "Summary"
         head = [c.value for c in wb["Summary"][1]]
-        assert head[:3] == ["Company", "Year", "Currency"]
-        assert head[3:5] == ["Total assets", "Total equity"]
+        assert head[:4] == ["Company", "Year", "Currency", "Sub-sector"]
+        assert head[4:6] == ["Total assets", "Total equity"]
         assert head[-2:] == ["Checks failed", "Source documents"]
 
     def test_figures_are_numbers_so_the_recipient_can_total_them(self, client):
@@ -784,8 +921,9 @@ class TestExcelExport:
         workbook rather than a picture of the grid."""
         row = next(r for r in _sheet_rows(_workbook(_export(client))["Summary"])
                    if r[0] == "PT AAA Tbk")
-        assert row[3] == 1_000_000.0
-        assert isinstance(row[3], (int, float))
+        # Column 3 is the sub-sector; the first figure follows it.
+        assert row[4] == 1_000_000.0
+        assert isinstance(row[4], (int, float))
 
     def test_an_absent_figure_stays_empty_rather_than_becoming_zero(self, client):
         """A blank means "no report disclosed this line", which is a different
@@ -793,7 +931,7 @@ class TestExcelExport:
         row = next(r for r in _sheet_rows(_workbook(_export(client))["Summary"])
                    if r[0] == "PT CCC Tbk")
         assert row[0] == "PT CCC Tbk"
-        assert row[3] is None, "CCC has sales but no total_assets"
+        assert row[4] is None, "CCC has sales but no total_assets"
 
     def test_it_covers_every_row_not_just_the_visible_page(self, client, tmp_path):
         """The grid pages at 50. An export that inherited the page size would
@@ -840,14 +978,14 @@ class TestExcelExport:
         assert [r[0] for r in rows] == ["PT BBB Tbk"]
         # total_assets on that row is undetected, so USD filtering must leave it
         # empty rather than reporting it under the wrong currency.
-        assert rows[0][3] is None
-        assert rows[0][7] == 120_000.0
+        assert rows[0][4] is None
+        assert rows[0][8] == 120_000.0
 
     def test_it_carries_the_same_columns_as_the_grid(self, client):
         """A file whose columns differ from the screen cannot be read against it."""
         grid = _rows(client)
         head = [c.value for c in _workbook(_export(client))["Summary"][1]]
-        assert head[3:-2] == [grid["labels"][f] for f in grid["fields"]]
+        assert head[4:-2] == [grid["labels"][f] for f in grid["fields"]]
 
     def test_a_row_whose_figures_do_not_reconcile_says_so_in_the_file(self, client):
         """The grid badges this row. An export that dropped the warning would be
@@ -863,6 +1001,24 @@ class TestExcelExport:
         text = "\n".join(str(c.value) for r in notes.iter_rows() for c in r if c.value)
         assert "PT BBB" in text
         assert "Blank figure" in text, "the caveats must travel with the data"
+
+    def test_it_records_every_selected_subsector(self, client):
+        """The sub-sectors travel as repeated parameters; the note must
+        carry each one, not a Python list repr."""
+        wb = _workbook(
+            _export(client, subsector=["D2. Food & Beverage", "11. Crops"])
+        )
+        assert [r[0] for r in _sheet_rows(wb["Summary"])] == [
+            "PT AAA Tbk",
+            "PT AAA Tbk",
+            "PT CCC Tbk",
+        ]
+        text = "\n".join(
+            str(c.value) for r in wb["Notes"].iter_rows() for c in r if c.value
+        )
+        assert "D2. Food & Beverage" in text
+        assert "11. Crops" in text
+        assert "['" not in text, "the filter note must be readable, not a repr"
 
     def test_an_empty_result_is_still_a_valid_workbook(self, client):
         """No rows must not mean a 500: a download that fails on an empty filter

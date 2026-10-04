@@ -1,4 +1,12 @@
-import { forwardRef, useId, type ReactNode } from 'react'
+import {
+  forwardRef,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type InputHTMLAttributes,
+  type ReactNode,
+} from 'react'
 
 /* ================================================================== layout */
 
@@ -320,7 +328,9 @@ export function Field({
 }: {
   label: ReactNode
   hint?: ReactNode
-  htmlFor: string
+  /** Omitted for a group of controls (a row of checkboxes), where
+   *  the label names the group rather than pointing at one control. */
+  htmlFor?: string
   children: ReactNode
   className?: string
 }) {
@@ -392,25 +402,227 @@ export function Select({
   )
 }
 
+export function MultiSelect({
+  label,
+  hint,
+  options,
+  values,
+  onChange,
+  placeholder = 'All',
+  className = '',
+}: {
+  label?: ReactNode
+  hint?: ReactNode
+  options: { value: string; label: string; count?: number }[]
+  /** The options in force. Several at once, unlike a native select. */
+  values: string[]
+  onChange: (values: string[]) => void
+  placeholder?: string
+  className?: string
+}) {
+  const id = useId()
+  // The label and the state text are named separately so the
+  // trigger can be labelled by both: a screen reader announces
+  // the field and what is in force ("Sub-sector, Food"),
+  // which a label[for] alone would hide behind the field name.
+  const labelId = `${id}-label`
+  const stateId = `${id}-state`
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+
+  // The list closes when the reader clicks elsewhere or presses
+  // Escape, the way a native select does. Mousedown rather than
+  // click, so a tick on an option never closes the list first:
+  // several options are meant to be picked in one visit.
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    const onDown = (e: MouseEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('keydown', onKey)
+    document.addEventListener('mousedown', onDown)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('mousedown', onDown)
+    }
+  }, [open])
+
+  const toggle = (value: string) =>
+    onChange(
+      values.includes(value)
+        ? values.filter((v) => v !== value)
+        : [...values, value],
+    )
+
+  const labelOf = (value: string) =>
+    options.find((o) => o.value === value)?.label ?? value
+  const shown =
+    values.length === 0
+      ? placeholder
+      : values.length === 1
+        ? labelOf(values[0])
+        : `${values.length} selected`
+
+  return (
+    <div className="min-w-0">
+      {label && (
+        <span
+          id={labelId}
+          className="mb-1 block text-xs font-medium text-muted-foreground"
+        >
+          {label}
+        </span>
+      )}
+      <div className="relative" ref={rootRef}>
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-haspopup="true"
+          aria-labelledby={label ? `${labelId} ${stateId}` : stateId}
+          onClick={() => setOpen((o) => !o)}
+          className={`${FIELD_BASE} flex h-10 cursor-pointer items-center justify-between gap-2 px-3 text-sm ${className}`}
+        >
+          {/* Muted while empty: the placeholder is a state, not a
+              value, and must not read as a selection. */}
+          <span
+            id={stateId}
+            className={`truncate ${values.length ? 'text-foreground' : 'text-muted-foreground'}`}
+          >
+            {shown}
+          </span>
+          <svg
+            aria-hidden="true"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${open ? 'rotate-180' : ''}`}
+          >
+            <path d="m6 9 6 6 6-6" />
+          </svg>
+        </button>
+        {open && (
+          <div
+            role="group"
+            aria-labelledby={label ? labelId : undefined}
+            className="absolute z-20 mt-1 max-h-64 w-full min-w-56 overflow-y-auto rounded-md border border-border bg-card p-1 shadow-lg"
+          >
+            {options.length === 0 && (
+              <p className="px-2 py-1.5 text-sm text-muted-foreground">
+                No options
+              </p>
+            )}
+            {options.map((o) => (
+              <label
+                key={o.value}
+                className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-accent hover:text-accent-foreground"
+              >
+                <CheckboxInput
+                  input={{
+                    checked: values.includes(o.value),
+                    onChange: () => toggle(o.value),
+                  }}
+                />
+                {/* The count rides inside the label text, the
+                    same "label (n)" wording a <select> uses, so
+                    the option's name reads complete to a screen
+                    reader and a truncation never splits it. */}
+                <span className="min-w-0 flex-1 truncate">
+                  {o.label}
+                  {o.count !== undefined && (
+                    <span className="text-xs text-muted-foreground">
+                      {` (${o.count.toLocaleString('id-ID')})`}
+                    </span>
+                  )}
+                </span>
+              </label>
+            ))}
+            {values.length > 0 && (
+              <div className="mt-1 border-t border-border pt-1">
+                <button
+                  type="button"
+                  onClick={() => onChange([])}
+                  className="w-full rounded px-2 py-1.5 text-left text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                >
+                  Clear
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+      {hint && (
+        <p className="mt-1 text-xs text-muted-foreground break-words">
+          {hint}
+        </p>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The visible half of a checkbox, shared by every checkbox in
+ * the app. The native input stays in the DOM -- keyboard
+ * focus, Space to toggle and screen-reader announcements are
+ * the browser's own -- but is invisible: the box beside it is
+ * drawn instead, because no two platforms render the native
+ * control alike and the platform look does not belong here.
+ */
+function CheckboxInput({
+  input,
+}: {
+  input: InputHTMLAttributes<HTMLInputElement>
+}) {
+  return (
+    <span className="relative flex h-[18px] w-[18px] shrink-0 items-center justify-center">
+      <input
+        type="checkbox"
+        {...input}
+        className="peer absolute inset-0 m-0 h-full w-full cursor-pointer opacity-0"
+      />
+      <span
+        aria-hidden="true"
+        className="flex h-full w-full items-center justify-center rounded-[4px] border border-input bg-card transition-colors peer-checked:border-primary peer-checked:bg-primary peer-focus-visible:ring-2 peer-focus-visible:ring-ring"
+      />
+      <svg
+        aria-hidden="true"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={3.5}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="pointer-events-none absolute h-3 w-3 text-primary-foreground opacity-0 transition-opacity peer-checked:opacity-100"
+      >
+        <path d="M20 6 9 17l-5-5" />
+      </svg>
+    </span>
+  )
+}
+
 export function Checkbox({
   label,
+  hint,
   className = '',
   ...rest
-}: { label: ReactNode } & React.InputHTMLAttributes<HTMLInputElement>) {
+}: { label: ReactNode; hint?: ReactNode } & InputHTMLAttributes<HTMLInputElement>) {
   const id = useId()
   return (
-    <label
-      htmlFor={id}
-      className="flex min-h-10 cursor-pointer items-center gap-2 text-sm text-foreground"
-    >
-      <input
-        id={id}
-        type="checkbox"
-        className={`h-4 w-4 shrink-0 cursor-pointer rounded border-input accent-primary ${className}`}
-        {...rest}
-      />
-      <span className="min-w-0 break-words">{label}</span>
-    </label>
+    <div className={`min-w-0 ${className}`}>
+      <label
+        htmlFor={id}
+        className="flex min-h-10 cursor-pointer items-center gap-2 text-sm text-foreground"
+      >
+        <CheckboxInput input={{ id, ...rest }} />
+        <span className="min-w-0 break-words">{label}</span>
+      </label>
+      {hint && <p className="mt-1 text-xs text-muted-foreground break-words">{hint}</p>}
+    </div>
   )
 }
 

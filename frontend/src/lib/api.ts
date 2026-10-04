@@ -62,11 +62,22 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 /** Builds `?a=1&b=x`, dropping null/undefined/empty so callers can pass filter
- *  state straight through without conditionally building the object. */
-export function qs(params: Record<string, string | number | boolean | null | undefined>): string {
+ *  state straight through without conditionally building the object. A list
+ *  value becomes a repeated parameter (`?a=1&a=2`) -- the only lossless way
+ *  to carry several values, since a filter's own text can contain the
+ *  separator a joined string would need. */
+export function qs(params: Record<string, string | number | boolean | string[] | null | undefined>): string {
   const sp = new URLSearchParams()
   for (const [k, v] of Object.entries(params)) {
     if (v === null || v === undefined || v === '') continue
+    if (Array.isArray(v)) {
+      for (const item of v) {
+        if (item !== '' && item !== null && item !== undefined) {
+          sp.append(k, String(item))
+        }
+      }
+      continue
+    }
     sp.set(k, String(v))
   }
   const s = sp.toString()
@@ -100,8 +111,9 @@ export const api = {
 
   /** The results grid: one row per company-year, one column per extracted
    *  field. `fields` narrows the columns; by default only the headline figures
-   *  are shown, in the server's reading order. */
-  resultsSummary: (params: Record<string, string | number | null>) =>
+   *  are shown, in the server's reading order. `subsector` is repeated, once
+   *  per selected classification. */
+  resultsSummary: (params: Record<string, string | number | string[] | null>) =>
     request<ResultsSummary>(`/results/summary${qs(params)}`),
 
   /** The same grid as a downloadable .xlsx, filtered the same way but
@@ -109,7 +121,7 @@ export const api = {
    *  worse than no file at all. A URL rather than a promise, because the
    *  browser performs the download -- `request()` is JSON-only. Filters are
    *  passed, `page`/`page_size` deliberately are not. */
-  summaryExportUrl: (params: Record<string, string | number | null>) =>
+  summaryExportUrl: (params: Record<string, string | number | string[] | null>) =>
     `${BASE}/results/summary/export${qs(params)}`,
 
   /** Which discovered reports have produced values yet. Makes the gap between

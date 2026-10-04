@@ -58,6 +58,7 @@ function summaryResponse(cells: Record<string, ReturnType<typeof cell>>) {
         company: 'ACME',
         year: 2024,
         currency: 'IDR',
+        subsector: 'Food',
         cells,
         documents: [{ id: 10, filename: 'acme-2024.xhtml', statements: ['balance_sheet'] }],
         failed_checks: {},
@@ -70,6 +71,7 @@ function summaryResponse(cells: Record<string, ReturnType<typeof cell>>) {
       gross_profit: 'Gross profit',
     },
     currencies: [{ currency: 'IDR', count: 2 }],
+    subsectors: [{ subsector: 'Food', count: 2 }],
     pagination: { page: 1, pages: 1, total: 1, page_size: 50 },
   }
 }
@@ -105,6 +107,11 @@ function renderResults(search = '?view=summary') {
 
 const openEditor = (label: RegExp) => screen.findByRole('button', { name: label })
 const amountInput = () => screen.findByLabelText(/corrected amount/i) as Promise<HTMLInputElement>
+// The trigger announces its field and its state together,
+// so it is found by role and part of its name, never by
+// the visible label alone.
+const subsectorTrigger = () =>
+  screen.getByRole('button', { name: /sub-sector/i })
 
 beforeEach(() => {
   for (const fn of Object.values(apiMock)) fn.mockReset()
@@ -191,8 +198,10 @@ describe('Filter state in the URL', () => {
   })
 
   it('counts only real filters', async () => {
-    renderResults('?page=3&company=ACME&year=2024&currency=USD')
-    expect(await screen.findByRole('button', { name: /clear 3 filters/i })).toBeTruthy()
+    renderResults(
+      '?page=3&company=ACME&year=2024&currency=USD&subsector=Food&profitable=true',
+    )
+    expect(await screen.findByRole('button', { name: /clear 5 filters/i })).toBeTruthy()
   })
 
   it('clears the filters and resets the page', async () => {
@@ -309,6 +318,135 @@ describe('Filter selects on the summary', () => {
     // Page 3 of a narrower result set would render empty, so it is dropped.
     await waitFor(() => expect(params().get('page')).toBeNull())
     expect(params().get('company')).toBe('ACME')
+  })
+
+  it('records the chosen sub-sector in the URL and re-queries the summary', async () => {
+    renderResults()
+    fireEvent.click(subsectorTrigger())
+    fireEvent.click(await screen.findByLabelText(/^food \(2\)$/i))
+
+    await waitFor(() => {
+      expect(params().getAll('subsector')).toEqual(['Food'])
+    })
+    expect(params().get('page')).toBeNull()
+    await waitFor(() =>
+      expect(apiMock.resultsSummary).toHaveBeenLastCalledWith(
+        expect.objectContaining({ subsector: ['Food'] }),
+      ),
+    )
+  })
+
+  it('lets several sub-sectors be selected at once', async () => {
+    apiMock.resultsSummary.mockResolvedValue({
+      ...TWO_FIGURES,
+      subsectors: [
+        { subsector: 'Food', count: 1 },
+        { subsector: 'Beverage', count: 1 },
+      ],
+    })
+    renderResults()
+    // One visit to the list: it stays open while options are
+    // ticked, which is the point of picking several.
+    fireEvent.click(subsectorTrigger())
+    fireEvent.click(await screen.findByLabelText(/^food \(1\)$/i))
+    fireEvent.click(screen.getByLabelText(/^beverage \(1\)$/i))
+
+    await waitFor(() => {
+      expect(params().getAll('subsector')).toEqual(['Food', 'Beverage'])
+    })
+    await waitFor(() =>
+      expect(apiMock.resultsSummary).toHaveBeenLastCalledWith(
+        expect.objectContaining({ subsector: ['Food', 'Beverage'] }),
+      ),
+    )
+
+    // Unticking one leaves the other in force.
+    fireEvent.click(screen.getByLabelText(/^food \(1\)$/i))
+    await waitFor(() => {
+      expect(params().getAll('subsector')).toEqual(['Beverage'])
+    })
+  })
+
+  it('names the chosen sub-sector on the closed control', async () => {
+    renderResults()
+    fireEvent.click(subsectorTrigger())
+    fireEvent.click(await screen.findByLabelText(/^food \(2\)$/i))
+
+    // The control reports what is in force without being opened,
+    // the way a select shows its value -- field name and
+    // selection together.
+    expect(
+      await screen.findByRole('button', { name: /sub-sector food/i }),
+    ).toBeTruthy()
+  })
+
+  it('clears every chosen sub-sector from the control', async () => {
+    renderResults()
+    fireEvent.click(subsectorTrigger())
+    fireEvent.click(await screen.findByLabelText(/^food \(2\)$/i))
+    await waitFor(() => expect(params().get('subsector')).toBe('Food'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
+
+    await waitFor(() => {
+      expect(params().getAll('subsector')).toEqual([])
+    })
+    expect(
+      screen.getByRole('button', { name: /sub-sector all sub-sectors/i }),
+    ).toBeTruthy()
+  })
+
+  it('closes the sub-sector list when the reader clicks elsewhere', async () => {
+    renderResults()
+    fireEvent.click(subsectorTrigger())
+    expect(await screen.findByLabelText(/^food \(2\)$/i)).toBeTruthy()
+
+    fireEvent.mouseDown(document.body)
+
+    expect(screen.queryByLabelText(/^food \(2\)$/i)).toBeNull()
+  })
+
+  it('labels the undeclared bucket so it reads as its own filter', async () => {
+    apiMock.resultsSummary.mockResolvedValue({
+      ...TWO_FIGURES,
+      subsectors: [
+        { subsector: 'Food', count: 1 },
+        { subsector: 'none', count: 1 },
+      ],
+    })
+    renderResults()
+    fireEvent.click(subsectorTrigger())
+    expect(
+      await screen.findByLabelText(/^no sub-sector declared \(1\)$/i),
+    ).toBeTruthy()
+  })
+
+  it('records the no-net-loss filter as a URL flag and re-queries', async () => {
+    renderResults()
+    fireEvent.click(screen.getByLabelText(/^no net loss$/i))
+
+    await waitFor(() => {
+      expect(params().get('profitable')).toBe('true')
+    })
+    expect(params().get('page')).toBeNull()
+    await waitFor(() =>
+      expect(apiMock.resultsSummary).toHaveBeenLastCalledWith(
+        expect.objectContaining({ profitable: 'true' }),
+      ),
+    )
+
+    // Switching it off must take the flag back out of the URL, or the
+    // grid would stay narrowed after the box was unticked.
+    fireEvent.click(screen.getByLabelText(/^no net loss$/i))
+    await waitFor(() => expect(params().get('profitable')).toBeNull())
+  })
+
+  it('re-queries when the sub-sector filter changes, not just the other filters', async () => {
+    renderResults('?subsector=Food')
+    await waitFor(() => expect(apiMock.resultsSummary).toHaveBeenCalled())
+    expect(apiMock.resultsSummary).toHaveBeenLastCalledWith(
+      expect.objectContaining({ subsector: ['Food'] }),
+    )
   })
 })
 

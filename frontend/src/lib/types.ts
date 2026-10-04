@@ -126,6 +126,10 @@ export interface SummaryRow {
   /** Reporting currency for the row: 'IDR', 'USD', 'Not detected' when no
    *  currency was found in the source, or 'Mixed' if the figures disagree. */
   currency: string | null
+  /** Reporting sub-sector, when the source declares one (e.g. "Food" or
+   *  "Individuals"). The API may send an empty string and it is not
+   *  guaranteed to be present. */
+  subsector: string | null
   cells: Record<string, SummaryCell | null>
   /** Reports a hand-entered figure on this row can be filed under, best first.
    *  A value must belong to a document, so an empty cell needs a target. */
@@ -177,6 +181,12 @@ export interface ResultsSummary {
    * would offer filters that can never match a row.
    */
   currencies: { currency: string; count: number }[]
+  /**
+   * Sub-sectors the current filters can still narrow to, the same way
+   * `currencies` is scoped. The literal key `none` is the bucket for
+   * company-years whose filing declares no sub-sector.
+   */
+  subsectors: { subsector: string; count: number }[]
   pagination: Pagination
 }
 

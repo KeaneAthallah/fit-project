@@ -21,9 +21,11 @@ import {
   Button,
   ButtonLink,
   Card,
+  Checkbox,
   EmptyState,
   ErrorBanner,
   Input,
+  MultiSelect,
   PageHeader,
   Pagination,
   Select,
@@ -33,13 +35,17 @@ import {
   Th,
 } from '../components/ui'
 
-const FILTER_KEYS = ['company', 'year', 'currency', 'subsector', 'page'] as const
+const FILTER_KEYS = ['company', 'year', 'currency', 'subsector', 'profitable', 'page'] as const
 
 // The keys that are genuinely filters. `page` is pagination rather than a
 // filter, so counting it would tell the reader they have a filter applied when
 // they have not, and "Clear N filters" would throw away their place in the
 // results along with the filters.
-const CLEARABLE_KEYS = ['company', 'year', 'currency', 'subsector'] as const
+const CLEARABLE_KEYS = ['company', 'year', 'currency', 'subsector', 'profitable'] as const
+
+// The sub-sector filter holds several classifications at once, so it travels
+// as repeated URL parameters rather than one joined string.
+const MULTI_KEYS = ['subsector'] as const
 
 const PAGE_SIZE = 50
 
@@ -808,7 +814,7 @@ function SummaryExport({
   params,
   rowCount,
 }: {
-  params: Record<string, string>
+  params: Record<string, string | string[]>
   rowCount: number
 }) {
   const empty = rowCount === 0
@@ -847,17 +853,20 @@ function SummaryExport({
 function SummaryGrid({
   companies,
   globalCurrencies,
+  selectedSubsectors,
   setParam,
   values,
   years,
-  subsectors,
 }: {
   companies: { company: string }[]
   globalCurrencies: { currency: string; count: number }[] | undefined
-  setParam: (key: string, value: string) => void
+  /** The sub-sector classifications in force, from the repeated URL
+   *  parameters. A company has one classification, but the reader may
+   *  want several of them on screen at once. */
+  selectedSubsectors: string[]
+  setParam: (key: string, value: string | string[]) => void
   values: Record<string, string>
   years: string[]
-  subsectors?: { subsector: string; count: number }[] | undefined
 }) {
   const page = Number(values.page || '1')
   // Which grid cell is open for editing, if any. Both states live here so only
@@ -883,16 +892,25 @@ function SummaryGrid({
     return () => window.removeEventListener('keydown', onKey)
   }, [activeCell])
 
+  // The URL carries the checkbox as the literal string 'true'. Anything
+  // else a hand-edited link might carry reads as off, so the control and
+  // the request can never disagree about whether the filter is applied.
+  const profitable = values.profitable === 'true'
+
   const summary = useQuery(
     () =>
       api.resultsSummary({
         company: values.company,
         year: values.year,
         currency: values.currency,
+        subsector: selectedSubsectors,
+        profitable: profitable ? 'true' : '',
         page,
         page_size: PAGE_SIZE,
       }),
-    [values.company, values.year, values.currency, page],
+    // The filters are the dependencies: leaving any out would let the
+    // URL change without the grid noticing.
+    [values.company, values.year, values.currency, selectedSubsectors, profitable, page],
   )
 
   // The export takes the same filters as the grid, and not the page number: a
@@ -902,6 +920,8 @@ function SummaryGrid({
     company: values.company,
     year: values.year,
     currency: values.currency,
+    subsector: selectedSubsectors,
+    profitable: profitable ? 'true' : '',
   }
 
   // The grid is the thing being built by a batch, so it polls while one runs.
@@ -950,21 +970,42 @@ function SummaryGrid({
           value={values.currency}
           onChange={(e) => setParam('currency', e.target.value)}
         />
-        {(subsectors ?? []).map((s) => (
-          <Select
-            key={s.subsector}
-            label="Sub-sector"
-            options={[
-              { value: '', label: 'All sub-sectors' },
-              { value: 'none', label: 'No sub-sector declared', count: s.count },
-              ...s.count > 0
-                ? []
-                : [{ value: s.subsector, label: s.subsector, count: s.count }]
-            ]}
-            value={values.subsector}
-            onChange={(e) => setParam('subsector', e.target.value)}
-          />
-        ))}
+        {/* The classification is one per company but pickable several
+            at once, so it is a multi-select rather than a dropdown
+            of one. The list comes from the summary's own response,
+            scoped the way the currency control is: only the sectors
+            the other filters can still reach. The server keeps a
+            selection the filters have emptied in the list at a count
+            of zero, so a ticked option never vanishes while the query
+            is still narrowed by it. */}
+        <MultiSelect
+          label="Sub-sector"
+          hint="The business classification the filing declares on its cover. One per company; pick several to compare them."
+          placeholder="All sub-sectors"
+          options={(data?.subsectors ?? []).map((s) => ({
+            value: s.subsector,
+            label:
+              s.subsector === 'none'
+                ? 'No sub-sector declared'
+                : s.subsector,
+            count: s.count,
+          }))}
+          values={selectedSubsectors}
+          onChange={(picked) => setParam('subsector', picked)}
+        />
+        {/* "No net loss" is a claim about the bottom line rather than a
+            column: the server keeps the company-years whose net result is
+            above zero whether or not the profit column is on screen, and
+            drops the rest -- including years with no profit figure at all,
+            because a missing number is not evidence of a profit. */}
+        <Checkbox
+          label="No net loss"
+          hint="Only company-years that reported a profit. Years that lost money, or show no profit figure, are left out."
+          checked={profitable}
+          onChange={(e) =>
+            setParam('profitable', e.target.checked ? 'true' : '')
+          }
+        />
       </div>
 
       {summary.error && (
@@ -1132,7 +1173,7 @@ function SummaryGrid({
                             belong to. */}
                         <Td hideBelow="lg" className="text-xs">
                           <span className="text-muted-foreground">
-                            {row.subsector ?? "—"}
+                            {row.subsector || 'â€”'}
                           </span>
                         </Td>
                         {data.fields.map((field, i) => {
@@ -1238,9 +1279,10 @@ function SummaryGrid({
 }
 
 export default function Results() {
-  const { setParam, clearAll, values, activeCount } = useUrlFilters(FILTER_KEYS, {
-    clearable: CLEARABLE_KEYS,
-  })
+  const { setParam, clearAll, values, multiValues, activeCount } = useUrlFilters(
+    FILTER_KEYS,
+    { clearable: CLEARABLE_KEYS, multi: MULTI_KEYS },
+  )
   const facets = useQuery(() => api.valueFacets(), [])
   const companies = useQuery(() => api.companies(), [])
 
@@ -1268,10 +1310,10 @@ export default function Results() {
       <SummaryGrid
         companies={companies.data?.items ?? []}
         globalCurrencies={facets.data?.currencies}
+        selectedSubsectors={multiValues.subsector ?? []}
         setParam={setParam}
         values={values}
         years={(facets.data?.years ?? []).map(String)}
-        subsectors={facets.data?.subsectors}
       />
     </>
   )

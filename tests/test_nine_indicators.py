@@ -94,6 +94,15 @@ def test_label_is_not_folded_into_a_nearer_field(
     assert got not in neighbours.get(field, set())
 
 
+def test_tax_line_accepts_a_second_wording():
+    """Different companies print the same cash-flow tax line differently,
+    so a second wording must land on the same field."""
+    assert map_label("Pembayaran pajak penghasilan badan", "cash_flow") == (
+        "income_tax_paid_operating",
+        1.0,
+    )
+
+
 class TestParenthesesAreSignificant:
     """Brackets that are part of the label must not be stripped away.
 

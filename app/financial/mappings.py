@@ -120,6 +120,8 @@ FIELD_LABELS: dict[str, dict[str, list[str]]] = {
     "cash_flow": {
         "income_tax_paid_operating": [
             "Penerimaan pengembalian (pembayaran) pajak penghasilan dari aktivitas operasi",
+            # The same line under another company's wording.
+            "Pembayaran pajak penghasilan badan",
         ],
         "cash_flow_operating": [
             "kas diterima dari aktivitas operasi", "arus kas dari aktivitas operasi",

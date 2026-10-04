@@ -20,11 +20,12 @@ correct year field.
 accounts_receivable, inventory, prepaid_expenses, fixed_assets, intangible_assets, \
 investment_properties, other_assets, current_liabilities, non_current_liabilities, \
 total_liabilities, issued_and_paid_up_capital, retained_earnings, total_equity, \
-total_liabilities_and_equity
-   income_statement: revenue, cost_of_revenue, gross_profit, operating_expenses, \
-operating_income, finance_income, finance_costs, profit_before_tax, income_tax, net_income
+equity_attributable_to_owners_of_parent, total_liabilities_and_equity
+   income_statement: sales, sales_and_revenue, cost_of_revenue, gross_profit, operating_expenses, \
+operating_income, finance_income, finance_costs, total_profit_loss_before_tax, \
+total_profit_loss, net_income
    cash_flow: cash_flow_operating, cash_flow_investing, cash_flow_financing, \
-net_change_in_cash, beginning_cash_balance, ending_cash_balance
+net_change_in_cash, beginning_cash_balance, ending_cash_balance, income_tax_paid_operating
    equity: authorized_capital, issued_capital, paid_up_capital, issued_and_paid_up_capital, \
 treasury_shares_quantity, treasury_shares_nominal_value, treasury_shares_carrying_value, \
 treasury_shares_percentage, additional_paid_in_capital, retained_earnings, \

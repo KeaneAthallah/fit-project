@@ -92,11 +92,15 @@ class ExtractedValue(Base):
     raw_label: Mapped[str | None] = mapped_column(Text, nullable=True)
     raw_value: Mapped[str | None] = mapped_column(Text, nullable=True)
     normalized_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Some line items are not amounts: an IDX subsector reads "D2. Food &
+    # Beverage". Those rows carry the classification verbatim here and leave
+    # normalized_value NULL, so a classification is never coerced to a number.
+    text_value: Mapped[str | None] = mapped_column(Text, nullable=True)
     currency: Mapped[str | None] = mapped_column(String(8), nullable=True)
     unit: Mapped[str | None] = mapped_column(String(64), nullable=True)
     page: Mapped[int | None] = mapped_column(Integer, nullable=True)
     section: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    extraction_method: Mapped[str] = mapped_column(String(64))  # ai | pattern | table | manual
+    extraction_method: Mapped[str] = mapped_column(String(64))  # table | cover_text | pattern | ai | manual
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
     status: Mapped[str] = mapped_column(String(32), default="OK")  # OK / REVIEW_REQUIRED
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now)

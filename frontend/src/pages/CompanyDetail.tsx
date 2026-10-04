@@ -308,7 +308,8 @@ export default function CompanyDetail() {
       { field: 'total_assets' },
       { field: 'total_liabilities' },
       { field: 'total_equity' },
-      { field: 'revenue' },
+      { field: 'equity_attributable_to_owners_of_parent' },
+      { field: 'sales_and_revenue' },
       { field: 'net_income' },
     ].map(({ field }) => ({
       label: profile.labels[field] ?? titleCase(field),
@@ -463,7 +464,7 @@ export default function CompanyDetail() {
         >
           <TrendChart
             profile={profile}
-            fields={['revenue', 'net_income', 'total_assets']}
+            fields={['sales_and_revenue', 'net_income', 'total_assets']}
           />
         </Card>
 

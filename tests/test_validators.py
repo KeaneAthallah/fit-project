@@ -164,15 +164,16 @@ class TestEvidence:
 class TestIncomeStatement:
     def test_gross_profit_ok(self):
         values = _doc(
-            ("income_statement", "revenue", 100),
+            ("income_statement", "sales_and_revenue", 100),
             ("income_statement", "cost_of_revenue", 70),
             ("income_statement", "gross_profit", 30),
         )
         check = _check(validate_document(values), "gross_profit_identity")
         assert check.status == "VALID"
 
-    def test_gross_profit_ok_with_sales_instead_of_revenue(self):
-        """A report that labels its top line 'Penjualan' has no `revenue`.
+    def test_gross_profit_ok_with_sales_instead_of_sales_and_revenue(self):
+        """A report that labels its top line 'Penjualan' has no
+        `sales_and_revenue`.
 
         The identity has to run on `sales` too, otherwise every such report
         silently loses the check instead of being validated.
@@ -201,7 +202,7 @@ class TestIncomeStatement:
         )
         check = _check(validate_document(values), "gross_profit_identity")
         assert check.status == "NOT_APPLICABLE"
-        assert "sales" in check.message and "revenue" in check.message
+        assert "sales" in check.message and "sales_and_revenue" in check.message
 
     def test_gross_profit_catches_a_bad_sales_figure(self):
         # Magnitudes must clear the default absolute tolerance (1,000) for the
@@ -214,14 +215,21 @@ class TestIncomeStatement:
         check = _check(validate_document(values), "gross_profit_identity")
         assert check.status == "ERROR"
 
-    def test_net_income_ok(self):
-        values = _doc(
-            ("income_statement", "profit_before_tax", 50),
-            ("income_statement", "income_tax", 10),
+    def test_no_pre_tax_to_net_identity_is_claimed(self):
+        """The pre-tax-to-net identity is not checked, and must not appear.
+
+        It needs an income-tax expense line. This schema has none:
+        `income_tax_paid_operating` is the cash amount from the cash-flow
+        statement, and `total_profit_loss_before_tax` differs from
+        `total_profit_loss` by exactly that tax, so no pairing of the fields
+        this schema does have forms the identity.
+        """
+        checks = validate_document(_doc(
+            ("income_statement", "total_profit_loss_before_tax", 50),
+            ("income_statement", "total_profit_loss", 40),
             ("income_statement", "net_income", 40),
-        )
-        check = _check(validate_document(values), "net_income_identity")
-        assert check.status == "VALID"
+        ))
+        assert not [c for c in checks if "net_income_identity" in c.check_name]
 
 
 class TestCashFlow:

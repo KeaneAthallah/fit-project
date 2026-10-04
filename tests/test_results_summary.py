@@ -69,7 +69,7 @@ def client(tmp_path, monkeypatch):
             [
                 _value(repo, doc, "total_assets", 1_000_000.0, page=5),
                 _value(repo, doc, "total_equity", 600_000.0, page=5),
-                _value(repo, doc, "revenue", 800_000.0, page=7),
+                _value(repo, doc, "sales_and_revenue", 800_000.0, page=7),
                 # Same company, one year earlier.
                 _value(repo, doc, "total_assets", 900_000.0, year=2023, page=5),
                 # A USD report, in a field the summary grid does not show. The
@@ -176,7 +176,7 @@ def test_default_columns_are_the_headline_figures_in_reading_order(client):
     assert body["fields"] == [
         "total_assets",
         "total_equity",
-        "revenue",
+        "sales_and_revenue",
         "sales",
         "net_income",
     ]
@@ -233,7 +233,7 @@ def test_figures_land_in_the_right_row_and_column(client):
     body = _rows(client)
     aaa_2024 = next(r for r in body["items"] if (r["company"], r["year"]) == ("PT AAA Tbk", 2024))
     assert aaa_2024["cells"]["total_assets"]["normalized_value"] == 1_000_000.0
-    assert aaa_2024["cells"]["revenue"]["normalized_value"] == 800_000.0
+    assert aaa_2024["cells"]["sales_and_revenue"]["normalized_value"] == 800_000.0
     assert aaa_2024["cells"]["net_income"] is None
 
 
@@ -255,12 +255,13 @@ def test_sales_and_revenue_are_separate_columns(client):
     body = _rows(client)
     aaa_2024 = next(r for r in body["items"] if (r["company"], r["year"]) == ("PT AAA Tbk", 2024))
     ccc = next(r for r in body["items"] if r["company"] == "PT CCC Tbk")
-    # A report that says "Penjualan" populates sales and leaves revenue empty.
-    # Collapsing the two would report a sales figure as revenue.
+    # A report that says "Penjualan dan pendapatan usaha" populates
+    # sales_and_revenue and leaves sales empty. Collapsing the two would report
+    # a sales figure as the combined line.
     assert aaa_2024["cells"]["sales"] is None
-    assert aaa_2024["cells"]["revenue"]["normalized_value"] == 800_000.0
+    assert aaa_2024["cells"]["sales_and_revenue"]["normalized_value"] == 800_000.0
     assert ccc["cells"]["sales"]["normalized_value"] == 300_000.0
-    assert ccc["cells"]["revenue"] is None
+    assert ccc["cells"]["sales_and_revenue"] is None
 
 
 def test_undated_report_still_gets_a_row(client):
@@ -402,6 +403,36 @@ def test_choosing_a_currency_does_not_shrink_the_choice_list(client):
     assert _rows(client, fields="finance_costs", currency="USD")["currencies"] == _rows(
         client, fields="finance_costs"
     )["currencies"]
+
+
+def test_the_currency_in_force_stays_offered_when_the_company_has_none(client):
+    """A filter that cannot be seen cannot be cleared.
+
+    The choice list is scoped to the company and year on screen, so a company
+    with no USD figure drops USD from the dropdown. If the select is left
+    holding `currency=USD` with no matching option, the browser renders the
+    first option instead: the control reads "All currencies" while the query
+    still filters on USD, and the reader has no way back. The currency in force
+    is therefore always offered, and a currency that matches nothing reports a
+    count of zero rather than vanishing.
+    """
+    body = _rows(client, company="PT BBB Tbk", currency="USD", fields="finance_costs")
+    assert body["items"] == [], "fixture company holds no USD figure"
+    offered = {c["currency"]: c["count"] for c in body["currencies"]}
+    assert offered["USD"] == 0, "the applied filter must be listed, at count zero"
+
+    # Same request spelled in a different case is the same filter, so it must
+    # not appear as a second, empty option beside the real one.
+    lower = _rows(client, company="PT BBB Tbk", currency="usd", fields="finance_costs")
+    assert [c["currency"] for c in lower["currencies"]] == [
+        c["currency"] for c in body["currencies"]
+    ]
+    assert len(lower["currencies"]) == len(body["currencies"])
+
+    # An undetected bucket behaves the same way rather than disappearing.
+    none_only = _rows(client, company="PT AAA Tbk", currency="none", fields="finance_costs")
+    assert none_only["items"] == []
+    assert {c["currency"]: c["count"] for c in none_only["currencies"]}["none"] == 0
 
 
 def test_filtering_by_currency_narrows_the_rows(client):

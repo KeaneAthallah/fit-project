@@ -215,9 +215,10 @@ def validate_document(
         """Like `run`, but the top of the identity may be any one of several
         fields.
 
-        A report labels the same top line 'Penjualan' or 'Pendapatan', which map
-        to `sales` and `revenue` respectively. Requiring one specific slug would
-        silently stop the check from running on half the corpus.
+        A report labels the same top line 'Penjualan', 'Penjualan dan
+        pendapatan usaha' or some other phrasing, which map to `sales` or
+        `sales_and_revenue`. Requiring one specific slug would silently stop
+        the check from running on part of the corpus.
         """
         got = {f: _get(values, s, f) for s, f in required}
         chosen: str | None = None
@@ -289,19 +290,19 @@ def validate_document(
                                      "income_statement", unit_scale=scale,
                                      evidence_extra={"top_line": g["top_field"]})
 
-        # Either 'sales' (Penjualan) or 'revenue' (Pendapatan) may be the top line.
-        run_with_topline("gross_profit_identity", "income_statement", ["sales", "revenue"],
+        # Either 'sales' (Penjualan) or the combined 'Penjualan dan pendapatan
+        # usaha' line may be the top line.
+        run_with_topline("gross_profit_identity", "income_statement", ["sales", "sales_and_revenue"],
                          [("income_statement", "cost_of_revenue"),
                           ("income_statement", "gross_profit")],
                          _gp_check)
 
-        run("net_income_identity", "income_statement",
-            [("income_statement", "profit_before_tax"), ("income_statement", "income_tax"),
-             ("income_statement", "net_income")],
-            lambda g: _check_difference("net_income_identity",
-                                        g["profit_before_tax"] - g["income_tax"], g["net_income"],
-                                        absolute_tolerance, relative_tolerance,
-                                        "income_statement", unit_scale=scale))
+        # No pre-tax-to-net identity is checked: it needs an income-tax expense
+        # line, which this schema does not carry. `income_tax_paid_operating`
+        # is the cash amount from the cash-flow statement, not the P&L charge,
+        # and `total_profit_loss_before_tax` differs from `total_profit_loss`
+        # by exactly that tax, so pairing them is not an identity and would
+        # report a false mismatch on every filing.
 
     # ---------------- Cash flow ---------------------------------------------
     begin = _get(values, "cash_flow", "beginning_cash_balance")

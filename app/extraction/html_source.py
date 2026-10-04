@@ -119,6 +119,8 @@ class HtmlFiling:
     declared_unit: tuple[str | None, int] | None = None
     # ISO code of the presentation currency, when the cover states one.
     declared_currency: str | None = None
+    # IDX subsector classification printed on the cover, when present.
+    declared_subsector: str | None = None
     warnings: list[str] = field(default_factory=list)
 
 
@@ -148,6 +150,14 @@ class HtmlDocument:
         for page in self.pages:
             if page.declared_currency is not None:
                 return page.declared_currency
+        return None
+
+    @property
+    def declared_subsector(self) -> str | None:
+        """The IDX subsector the cover declares, or None if it declares none."""
+        for page in self.pages:
+            if page.declared_subsector is not None:
+                return page.declared_subsector
         return None
 
 
@@ -240,6 +250,40 @@ def read_declared_currency(html: str) -> str | None:
     return None
 
 
+def read_cover_subsector(html: str) -> str | None:
+    """Read the IDX subsector printed on the cover, verbatim.
+
+    Covers state a classification as a three-line block -- Indonesian
+    label, value, English label -- for example::
+
+        Subsektor
+        D2. Food & Beverage
+        Subsector
+
+    The value sits directly *below* the Indonesian label, which is the
+    opposite of the scale and currency readers that step back from the
+    English label. Requiring the English label to be the line immediately
+    after the value is what makes the read safe: it confirms the block is
+    the classification triple rather than some other line that happens to
+    follow the word, and it holds for all 128 covers in the corpus. The
+    value is returned exactly as printed, which matters because the corpus
+    carries both the older numeric IDX codes (``12. Plantation``) and the
+    newer lettered ones (``D2. Food & Beverage``).
+    """
+    lines = _plain_lines(html)
+    for index, line in enumerate(lines):
+        if line.strip().lower() != "subsektor":
+            continue
+        if index + 2 >= len(lines):
+            return None
+        value = lines[index + 1].strip()
+        english = lines[index + 2].strip().lower()
+        if value and english == "subsector":
+            return value
+        return None
+    return None
+
+
 def _cell_grid(html: str) -> list[list[list[str]]]:
     """Every table in the document as a list of rows of cell text."""
     tables: list[list[list[str]]] = []
@@ -287,6 +331,7 @@ def read_html_file(path: Path, page_number: int = 1,
         path=Path(path),
         declared_unit=read_declared_scale(html),
         declared_currency=read_declared_currency(html),
+        declared_subsector=read_cover_subsector(html),
         warnings=warnings,
     )
 

@@ -28,3 +28,7 @@ rich>=13.7.0
 # Optional dashboard
 fastapi>=0.110.0
 uvicorn>=0.29.0
+# Native filesystem events for uvicorn's reloader. Without it uvicorn falls back
+# to polling, which can miss a save that lands twice inside one poll interval,
+# and it ignores --reload-include/--reload-exclude with a warning.
+watchfiles>=0.21.0

@@ -69,8 +69,12 @@ class TestImplausibility:
         assert not is_implausible_amount(1.5, "margin", "percent")
 
     def test_floor_boundary(self):
-        assert not is_implausible_amount(MIN_PLAUSIBLE_MONETARY, "revenue")
-        assert is_implausible_amount(MIN_PLAUSIBLE_MONETARY - 1, "revenue")
+        # The rupiah floor only governs rows read at a stated scale; a row in
+        # plain units is held to the fragment floor instead.
+        assert not is_implausible_amount(MIN_PLAUSIBLE_MONETARY, "sales", "juta")
+        assert is_implausible_amount(MIN_PLAUSIBLE_MONETARY - 1, "sales", "juta")
+        assert not is_implausible_amount(19_757, "non_controlling_interest", None)
+        assert is_implausible_amount(37, "total_assets", None)
 
 
 class TestPageMagnitudes:

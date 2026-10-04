@@ -25,9 +25,46 @@ from __future__ import annotations
 
 import re
 
-# One miliar rupiah. Indonesian listed companies report in the billions, so a
-# monetary statement line item below this is a misparse rather than a figure.
-MIN_PLAUSIBLE_MONETARY = 1_000_000_000.0
+# The floor below a monetary figure is not implausible is expressed in the
+# currency the filing actually reported, not in rupiah for everything. It used
+# to be one rupiah constant, which flagged correct figures for two unrelated
+# reasons:
+#
+#   - A currency mismatch. PMMP's 2024 total loss of -122,921,818 USD is an
+#     ordinary listed-company result; it was flagged only because 1.2e8 is below
+#     a 1e9 rupiah threshold. 632 such rows were USD.
+#   - A filer reporting in whole currency units. A non-controlling interest of
+#     19,757 rupiah is what the filing says, and it is real.
+#
+# The floor exists to catch a mis-detected scale multiplier, so it can only be
+# judged against the scale that was actually applied -- see
+# `minimum_plausible_monetary`.
+_MIN_PLAUSIBLE_MONETARY_BY_CURRENCY = {
+    "IDR": 1_000_000_000.0,
+    "USD": 100_000.0,
+}
+# An undetected currency is held to the rupiah floor rather than a relaxed one:
+# the corpus is overwhelmingly rupiah, and where the currency was genuinely not
+# read the conservative threshold is the right default.
+_MIN_PLAUSIBLE_MONETARY_DEFAULT = 1_000_000_000.0
+
+# Floor for a row in plain currency units, where no rupiah-scale assumption may
+# be made. Low enough to pass any real whole-rupiah or whole-dollar amount, high
+# enough to still reject a stray fragment: a page number or a stray digit read
+# as money lands far below it.
+_MIN_PLAUSIBLE_PLAIN_UNITS = 1_000.0
+
+# Multiplier each recognised unit label stands for. Recorded so the scale a row
+# was read at is inspectable next to the floors derived from it.
+MULTIPLIER_BY_UNIT = {
+    "ribuan": 1_000.0,
+    "juta": 1_000_000.0,
+    "miliar": 1_000_000_000.0,
+}
+
+# Kept as the module-level name callers and tests import. It is the rupiah floor,
+# which is what a row in rupiah at a recognised scale is held to.
+MIN_PLAUSIBLE_MONETARY = _MIN_PLAUSIBLE_MONETARY_BY_CURRENCY["IDR"]
 
 # Ceiling for a single reported line item, used to catch a unit multiplier
 # applied too many times.
@@ -66,8 +103,31 @@ def is_monetary(field: str | None, unit: str | None = None) -> bool:
     return True
 
 
+def minimum_plausible_monetary(currency: str | None = None,
+                               unit: str | None = None) -> float:
+    """Smallest normalized amount that can be a real figure, in reported units.
+
+    - No scale multiplier was recorded (`unit is None`). The filing stated plain
+      currency units, so a rupiah threshold has nothing to say about it: this is
+      the case for 12,855 of 21,041 extracted rows, and it covered 1,172 of the
+      1,309 rows the old rupiah floor flagged -- a non-controlling interest of
+      19,757, a -122,921,818 USD loss. The floor drops to a bare
+      fragment-detector, which still rejects a page number (37) read as money.
+    - A scale was applied (`unit` is 'juta', 'ribuan', ...). The currency's own
+      floor applies, so a mis-detected multiplier is still caught.
+
+    The ceiling is unaffected either way, so a unit applied too many times is
+    still rejected in every currency.
+    """
+    if unit is None:
+        return _MIN_PLAUSIBLE_PLAIN_UNITS
+    return _MIN_PLAUSIBLE_MONETARY_BY_CURRENCY.get(
+        currency, _MIN_PLAUSIBLE_MONETARY_DEFAULT)
+
+
 def is_implausible_amount(normalized: float | None, field: str | None = None,
-                          unit: str | None = None) -> bool:
+                          unit: str | None = None,
+                          currency: str | None = None) -> bool:
     """True when the amount cannot be a real reported figure."""
     if normalized is None:
         return False
@@ -76,7 +136,9 @@ def is_implausible_amount(normalized: float | None, field: str | None = None,
     magnitude = abs(normalized)
     if magnitude == 0.0:
         return False
-    return magnitude < MIN_PLAUSIBLE_MONETARY or magnitude > MAX_PLAUSIBLE_MONETARY
+    if magnitude > MAX_PLAUSIBLE_MONETARY:
+        return True
+    return magnitude < minimum_plausible_monetary(currency, unit)
 
 
 _NUM_RE = re.compile(r"\d[\d.,]*")

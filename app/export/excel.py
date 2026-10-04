@@ -58,10 +58,11 @@ STATEMENT_SHEETS = [
 STATEMENT_TITLE_ROWS = {
     "balance_sheet": ["total_assets", "current_assets", "non_current_assets", "total_liabilities",
                       "total_equity", "total_liabilities_and_equity"],
-    "income_statement": ["sales", "revenue", "cost_of_revenue", "gross_profit", "operating_income",
-                         "profit_before_tax", "income_tax", "net_income"],
+"income_statement": ["sales", "sales_and_revenue", "cost_of_revenue", "gross_profit", "operating_income",
+                          "total_profit_loss_before_tax", "total_profit_loss", "net_income"],
     "cash_flow": ["cash_flow_operating", "cash_flow_investing", "cash_flow_financing",
-                  "net_change_in_cash", "beginning_cash_balance", "ending_cash_balance"],
+                  "net_change_in_cash", "beginning_cash_balance", "ending_cash_balance",
+                  "income_tax_paid_operating"],
     "equity": ["authorized_capital", "issued_capital", "paid_up_capital",
                "issued_and_paid_up_capital", "treasury_shares_quantity",
                "treasury_shares_nominal_value", "treasury_shares_carrying_value",
@@ -130,7 +131,7 @@ def summary_grid_workbook(
     ws = wb.active
     ws.title = "Summary"
 
-    headings = ["Company", "Year", "Currency"]
+    headings = ["Company", "Year", "Currency", "Sub-sector"]
     headings += [labels.get(f, f.replace("_", " ").capitalize()) for f in columns]
     headings += ["Checks failed", "Source documents"]
     ws.append(headings)
@@ -157,6 +158,10 @@ def summary_grid_workbook(
             row.get("company"),
             row.get("year"),
             row.get("currency"),
+            # Stated as filed, code prefix and all. Two filings describing one
+            # sector are left as the two strings they are: merging them here
+            # would assert an equivalence the source never made.
+            row.get("subsector"),
             *figures,
             ", ".join(failed),
             ", ".join(sources),
@@ -166,7 +171,7 @@ def summary_grid_workbook(
 
     ncols = len(headings)
     nrows = len(rows)
-    first_figure, last_figure = 4, 3 + len(columns)
+    first_figure, last_figure = 5, 4 + len(columns)
 
     for c in range(1, ncols + 1):
         cell = ws.cell(row=1, column=c)
@@ -306,14 +311,14 @@ def export_workbook(cfg: AppConfig, out_path: Path | None = None) -> Path:
     # Sheet 1 — Summary
     ws = wb.active
     ws.title = "Summary"
-    headers = ["Company", "Year", "Sales", "Revenue", "Net Income", "Total Assets", "Total Liabilities",
+    headers = ["Company", "Year", "Sales", "Sales and Revenue", "Net Income", "Total Assets", "Total Liabilities",
                "Total Equity", "Operating Cash Flow", "Investing Cash Flow", "Financing Cash Flow",
                "Extraction Status", "Confidence"]
     ws.append(headers)
     doc_by_id = {d.id: d for d in docs}
     summary_rows = {}
     for v in values:
-        if v.field not in ("sales", "revenue", "net_income", "total_assets", "total_liabilities",
+        if v.field not in ("sales", "sales_and_revenue", "net_income", "total_assets", "total_liabilities",
                            "total_equity", "cash_flow_operating", "cash_flow_investing",
                            "cash_flow_financing"):
             continue
@@ -327,11 +332,11 @@ def export_workbook(cfg: AppConfig, out_path: Path | None = None) -> Path:
             e = row.get(f)
             return e.normalized_value if e else None
         # Confidence is reported for whichever top line the report used.
-        conf = row.get("sales") or row.get("revenue")
+        conf = row.get("sales") or row.get("sales_and_revenue")
         doc = next((d for d in docs if d.company == company), None)
         ws.append([
             company, year,
-            val("sales"), val("revenue"),
+            val("sales"), val("sales_and_revenue"),
             val("net_income"), val("total_assets"),
             val("total_liabilities"), val("total_equity"),
             val("cash_flow_operating"), val("cash_flow_investing"), val("cash_flow_financing"),

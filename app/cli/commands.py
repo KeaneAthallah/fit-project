@@ -295,17 +295,120 @@ def inspect(document_query: str) -> None:
 @cli.command()
 @click.option("--host", default="127.0.0.1")
 @click.option("--port", default=8000, type=int)
-def dashboard(host: str, port: int) -> None:
+@click.option(
+    "--reload",
+    "reload_",
+    is_flag=True,
+    default=False,
+    help="Restart the server when app/ changes, so backend edits need no manual restart.",
+)
+def dashboard(host: str, port: int, reload_: bool) -> None:
     """Launch the local web dashboard (optional; requires fastapi/uvicorn)."""
     try:
         import uvicorn
     except ImportError:
         console.print("[red]fastapi/uvicorn not installed. pip install fastapi uvicorn[/red]")
         return
+
+    if reload_:
+        _serve_with_watch(host, port)
+        return
+
     from app.dashboard.server import create_app
 
     cfg = _cfg()
     uvicorn.run(create_app(cfg), host=host, port=port)
+
+
+def _serve_with_watch(host: str, port: int) -> None:
+    """Run the API in a child process and restart it when app/ changes.
+
+    uvicorn's own reloader is not used here. On Windows it stops the worker with
+    ``os.kill(pid, CTRL_C_EVENT)`` followed by a blocking ``process.join()``, and
+    it only works when a console is attached: the event goes to the console, not
+    to the handle, so a worker whose stdout is a log file never receives it and
+    the join never returns. Since this launcher deliberately redirects output to
+    logs/dashboard-api.log, that path hangs on the first edit. Supervising the
+    child directly makes the restart a plain terminate-and-respawn, which behaves
+    the same in a terminal and with redirected output.
+    """
+    import os
+    import subprocess
+    import threading
+
+    try:
+        from watchfiles import watch
+    except ImportError:
+        console.print(
+            "[red]watchfiles is required for --reload. pip install watchfiles[/red]"
+        )
+        return
+
+    root = Path.cwd()
+    watch_dir = root / "app"
+    if not watch_dir.is_dir():
+        console.print(f"[red]no app/ directory under {root}; nothing to watch[/red]")
+        return
+
+    # A new process group keeps a console Ctrl+C aimed at this watcher from also
+    # killing the worker: stopping is then always this loop's decision, so a
+    # child that is mid-restart cannot be killed twice and orphaned.
+    creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0
+
+    def spawn() -> subprocess.Popen:
+        return subprocess.Popen(
+            [sys.executable, "-m", "app.cli.commands", "dashboard",
+             "--host", host, "--port", str(port)],
+            cwd=str(root),
+            creationflags=creationflags,
+        )
+
+    stopping = threading.Event()
+    child: subprocess.Popen | None = spawn()
+
+    def stop_child(proc: subprocess.Popen | None) -> None:
+        if proc is None or proc.poll() is not None:
+            return
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            # A worker wedged in a request will not act on SIGTERM in time.
+            proc.kill()
+            proc.wait(timeout=5)
+
+    try:
+        for changes in watch(
+            str(watch_dir),
+            stop_event=stopping,
+            # Editors save in bursts and a save often rewrites a sibling file;
+            # coalescing first means one restart per save rather than several.
+            debounce=500,
+            step=50,
+            watch_filter=lambda _change, path: path.endswith(".py"),
+        ):
+            if stopping.is_set():
+                break
+            assert child is not None
+            if child.poll() is not None:
+                # Crashed on its own. Respawning here would hide a real error
+                # behind an endless crash loop, so report it and stop.
+                console.print(
+                    f"[red]server exited with code {child.returncode}; "
+                    f"not watching for changes[/red]"
+                )
+                break
+            if not changes:
+                continue
+            names = ", ".join(sorted({Path(c[1]).name for c in changes}))
+            console.print(f"[cyan]changed: {names} -- restarting[/cyan]")
+            stop_child(child)
+            child = spawn()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        stopping.set()
+        stop_child(child)
 
 
 @cli.command("diagnose")

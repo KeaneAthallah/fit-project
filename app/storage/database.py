@@ -49,6 +49,8 @@ _COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
     ("extracted_values", "original_method", "VARCHAR(64)"),
     ("extracted_values", "edited_at", "DATETIME"),
     ("extracted_values", "edit_note", "TEXT"),
+    # Non-monetary line items (IDX subsector classification).
+    ("extracted_values", "text_value", "TEXT"),
 ]
 
 _INDEX_MIGRATIONS: list[tuple[str, str]] = [

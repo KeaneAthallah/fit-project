@@ -82,6 +82,39 @@ class DocumentResult:
     review_count: int = 0
 
 
+# Confidence says how authoritative the page a figure was read from is, and
+# nothing else. Label matching contributes no term because it is exact: a label
+# either is the registered wording or it is not, so scoring the match was a
+# constant that crowded out the distinction worth showing. It used to be
+# compounded the other way too -- `map_conf * 0.9` on top of a label score that
+# was already 1.0 for every match, which is how an exact, hand-checked line item
+# ended up stored as 0.9 and labelled "90% confident".
+CONFIDENCE_STATEMENT_PAGE = 1.0
+CONFIDENCE_HEADER_ZIPPED = 0.9
+CONFIDENCE_INDIRECT = 0.75
+
+
+def page_confidence(section: str | None, year_from_header: bool = False) -> float:
+    """Confidence for a figure read off a page of this authority.
+
+    A primary financial statement page is authoritative for its own line items,
+    so its figures are certain as to which line item they are. A figure whose
+    year was zipped to a verified table header column is one step down, and a
+    figure from an unsectioned or notes page is lowest: notes routinely restate
+    a total or clip a column, so the figure is real but the page is not the
+    place to read the statement's totals from.
+
+    The three tiers mirror the ranking in `_authority` and `_value_rank`, so the
+    number a reader sees and the number that picks the winner say the same
+    thing.
+    """
+    if section in STATEMENT_KEYS:
+        return CONFIDENCE_STATEMENT_PAGE
+    if year_from_header:
+        return CONFIDENCE_HEADER_ZIPPED
+    return CONFIDENCE_INDIRECT
+
+
 def _value_rank(v: dict) -> tuple[int, float]:
     """Support score for an observation, used to settle competing values.
 
@@ -468,6 +501,9 @@ class DocumentProcessor:
         currency = filing.declared_currency
         if currency is not None:
             result.declared_currency = currency  # type: ignore[attr-defined]
+        subsector = filing.declared_subsector
+        if subsector is not None:
+            result.declared_subsector = subsector  # type: ignore[attr-defined]
         return pages
 
     # ------------------------------------------------------------------ #
@@ -607,7 +643,8 @@ class DocumentProcessor:
             # Rank implausible amounts below every real observation. They are
             # still recorded (the data is auditable, and the exporter flags
             # them) but a bare fragment must never outrank the real total.
-            if is_implausible_amount(v.get("normalized_value"), fld, v.get("unit")):
+            if is_implausible_amount(v.get("normalized_value"), fld, v.get("unit"),
+                                       v.get("currency")):
                 v["implausible"] = True
                 # ...and it must stop claiming to be a verified figure. The
                 # ranking above only decides which value is *shown*; without
@@ -628,6 +665,35 @@ class DocumentProcessor:
         if unmapped:
             result.metrics["unmapped_fields"] = len(unmapped)
             self._write_unmapped(doc, unmapped)
+
+        # The IDX subsector is a classification, not an amount, and it is not a
+        # table row: the cover states it as a label/value/label text block that
+        # the table parser does not see. It is stored verbatim in text_value with
+        # normalized_value left NULL rather than being coerced to a number.
+        subsector = getattr(result, "declared_subsector", None)
+        if subsector:
+            cover_page = pages[0]["page_number"] if pages else None
+            add("cover", "sub_sector", {
+                "company": doc.company,
+                "year": year,
+                "statement": "cover",
+                "field": "sub_sector",
+                "raw_label": "Subsektor",
+                "raw_value": subsector,
+                "normalized_value": None,
+                "text_value": subsector,
+                "currency": None,
+                "unit": None,
+                "page": cover_page,
+                "section": None,
+                "extraction_method": "cover_text",
+                # The cover is the declared sub-sector's own home, the way the
+                # balance sheet is the home of total assets, so this reading is
+                # as authoritative as it gets -- not a table value and not a
+                # restatement.
+                "confidence": CONFIDENCE_STATEMENT_PAGE,
+                "status": "OK",
+            })
 
         # B. AI extraction on relevant pages only
         if self.ai is not None and self.ai.provider_name != "none":
@@ -742,7 +808,10 @@ class DocumentProcessor:
                 header_years = pt.header_years
 
             for cell in rows:
-                fld, map_conf = map_label(cell.row_label, section)
+                # The match score is deliberately discarded: matching is exact,
+                # so it carries no information about how much to trust the
+                # figure. `page_confidence` answers that instead.
+                fld, _matched = map_label(cell.row_label, section)
                 if fld is None:
                     # Preserve unmapped labeled values (requirement #4): stored
                     # alongside results with status UNMAPPED_FIELD, never an error.
@@ -778,7 +847,7 @@ class DocumentProcessor:
                         qty = parse_share_quantity(raw)
                         if qty is None:
                             continue
-                        conf = map_conf * 0.9
+                        from_header = yr is not None and bool(header_years)
                         values_entry = {
                             "company": doc.company,
                             "year": yr or self._pick_year(doc, header_years),
@@ -791,8 +860,8 @@ class DocumentProcessor:
                             "unit": "shares",
                             "page": p["page_number"],
                             "section": "equity",
-                            "extraction_method": "table" if pt is not None else "ocr",
-                            "confidence": round(min(conf, 0.95), 3),
+                            "extraction_method": "table",
+                            "confidence": page_confidence("equity", from_header),
                             "status": "OK",
                         }
                         add("equity", fld, values_entry)
@@ -825,8 +894,10 @@ class DocumentProcessor:
                                     "unit": "percent",
                                     "page": p["page_number"],
                                     "section": section,
-                                    "extraction_method": "table" if pt is not None else "ocr",
-                                    "confidence": round(min(map_conf * 0.9, 0.95), 3),
+                                    "extraction_method": "table",
+                                    "confidence": page_confidence(
+                                        section, yr is not None and bool(header_years)
+                                    ),
                                     "status": "OK",
                                 })
                             continue
@@ -849,10 +920,7 @@ class DocumentProcessor:
                         continue
                     if parsed is None:
                         continue
-                    conf = map_conf * 0.9
-                    if p["pdf_type"] == "SCANNED":
-                        ocr_conf = p.get("ocr_confidence") or 0.6
-                        conf *= 0.5 + 0.5 * ocr_conf
+                    conf = page_confidence(section, yr is not None and bool(header_years))
                     # Plausibility guard against false unit detection: if the
                     # scaled value would exceed the global market-cap-scale
                     # ceiling (10^17 IDR) the multiplier is almost certainly
@@ -870,7 +938,11 @@ class DocumentProcessor:
                         normalized = parsed
                         unit_out = None
                         currency_out = unit_info.currency
-                        conf *= 0.6
+                        # The stated scale is rejected, so the magnitude is no
+                        # longer a clean reading of the figure even though the
+                        # page is authoritative. Hold it at the indirect tier
+                        # rather than presenting it as verified.
+                        conf = CONFIDENCE_INDIRECT
                     values_entry = {
                         "company": doc.company,
                         "year": yr or self._pick_year(doc, header_years),
@@ -883,8 +955,8 @@ class DocumentProcessor:
                         "unit": unit_out,
                         "page": p["page_number"],
                         "section": section,
-                        "extraction_method": "table" if pt is not None else "ocr",
-                        "confidence": round(min(conf, 0.95), 3),
+                        "extraction_method": "table",
+                        "confidence": conf,
                         "status": "OK",
                     }
                     if yr is not None and header_years:

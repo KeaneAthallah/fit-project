@@ -23,7 +23,7 @@ from typing import Any
 from app.core.config import AppConfig
 from app.core.logging import get_logger
 from app.financial.plausibility import (
-    MIN_PLAUSIBLE_MONETARY,
+    MAX_PLAUSIBLE_MONETARY,
     is_implausible_amount,
 )
 from app.storage.database import get_engine, get_session_factory
@@ -73,15 +73,17 @@ HEADLINE_FIELDS = (
     "total_assets",
     "total_liabilities",
     "total_equity",
+    "equity_attributable_to_owners_of_parent",
     "total_liabilities_and_equity",
     "sales",
-    "revenue",
+    "sales_and_revenue",
     "cost_of_revenue",
     "gross_profit",
     "operating_income",
-    "profit_before_tax",
-    "income_tax",
+    "total_profit_loss_before_tax",
+    "total_profit_loss",
     "net_income",
+    "income_tax_paid_operating",
     "cash_flow_operating",
     "cash_flow_investing",
     "cash_flow_financing",
@@ -91,8 +93,9 @@ HEADLINE_FIELDS = (
 
 # A normalized monetary amount is stored in whole rupiah. The plausibility
 # floor and ceiling live in app.financial.plausibility so extraction, validation
-# and export can never disagree about what counts as a real figure.
-PLAUSIBLE_MIN_ABS = MIN_PLAUSIBLE_MONETARY
+# and export can never disagree about what counts as a real figure. The floor
+# itself is per-currency and per-scale (see `minimum_plausible_monetary`), so it
+# is not restated here as a constant.
 
 
 def _write(path: Path, headers: Sequence[str], rows: Iterable[Sequence[Any]]) -> int:
@@ -108,18 +111,25 @@ def _write(path: Path, headers: Sequence[str], rows: Iterable[Sequence[Any]]) ->
 
 
 def _flag(norm: float | None, unit: str | None = None,
-          field: str | None = None) -> str:
+          field: str | None = None,
+          currency: str | None = None) -> str:
     """Marker column: WHY a reviewer should distrust this row.
 
     Silence is the dangerous outcome for financial data, so anything
     implausible is labelled explicitly instead of being quietly emitted.
+
+    Which of the two reasons applies is decided against the same floor the
+    plausibility module uses for this row's currency and scale. It used to
+    compare against a local copy of the rupiah constant, which meant a USD row
+    could be labelled IMPLAUSIBLE_MAGNITUDE on a rupiah threshold.
     """
     if norm is None:
         return ""
-    if is_implausible_amount(norm, field, unit):
-        return ("IMPLAUSIBLE_MAGNITUDE" if abs(norm) < PLAUSIBLE_MIN_ABS
-                else "IMPLAUSIBLE_SCALE")
-    return ""
+    if not is_implausible_amount(norm, field, unit, currency):
+        return ""
+    if abs(norm) > MAX_PLAUSIBLE_MONETARY:
+        return "IMPLAUSIBLE_SCALE"
+    return "IMPLAUSIBLE_MAGNITUDE"
 
 
 def section_of(value: Any) -> str:
@@ -188,6 +198,10 @@ def export_reports(cfg: AppConfig, out_dir: Path | None = None) -> dict[str, int
                 v.raw_label,
                 v.raw_value,
                 v.normalized_value,
+                # Blank for every monetary line, but the only place the declared
+                # sub-sector's text lands in a report. Without it the cover
+                # statement exports as a row of empty cells.
+                getattr(v, "text_value", None) or "",
                 v.currency,
                 v.unit,
                 v.page,
@@ -196,16 +210,16 @@ def export_reports(cfg: AppConfig, out_dir: Path | None = None) -> dict[str, int
                 v.confidence,
                 v.extraction_method,
                 v.status,
-                _flag(v.normalized_value, v.unit, v.field),
+                _flag(v.normalized_value, v.unit, v.field, v.currency),
             ]
 
     counts = {
         REPORT_FILENAME: _write(
             out / REPORT_FILENAME,
             ["company", "year", "section", "field", "label", "raw_value",
-             "normalized_value", "currency", "unit", "page", "page_section",
-             "source_file", "confidence", "extraction_method", "status",
-             "data_flags"],
+             "normalized_value", "text_value", "currency", "unit", "page",
+             "page_section", "source_file", "confidence", "extraction_method",
+             "status", "data_flags"],
             _report_rows(),
         )
     }

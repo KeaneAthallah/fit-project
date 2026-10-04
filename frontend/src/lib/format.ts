@@ -47,14 +47,20 @@ export function rupiah(value: number | null | undefined, fallback = '—'): stri
 export function bytes(value: number): string {
   if (value < 1024) return `${value} B`
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
-  return `${(value / 1024 / 1024).toFixed(1)} MB`
+  if (value < 1024 * 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MB`
+  return `${(value / 1024 / 1024 / 1024).toFixed(1)} GB`
 }
 
 export function duration(seconds: number | null | undefined): string {
   if (seconds === null || seconds === undefined || Number.isNaN(seconds)) return '—'
-  if (seconds < 60) return `${seconds.toFixed(1)}s`
-  const m = Math.floor(seconds / 60)
-  if (m < 60) return `${m}m ${Math.round(seconds % 60)}s`
+  // Rounded to the displayed precision first, so 59.96 carries into the next
+  // branch as 1m 0s instead of being printed as "60.0s", and 119.6 cannot round
+  // its 59.6 seconds up into "1m 60s".
+  const rounded = Math.round(seconds * 10) / 10
+  if (rounded < 60) return `${rounded.toFixed(1)}s`
+  const whole = Math.round(rounded)
+  const m = Math.floor(whole / 60)
+  if (m < 60) return `${m}m ${whole % 60}s`
   const h = Math.floor(m / 60)
   return `${h}h ${m % 60}m`
 }
@@ -116,15 +122,27 @@ export function currencyLabel(code: string | null | undefined, fallback = '—')
 }
 
 /** Options for a currency filter, built from the server's counts so the reader
- *  can see that a currency exists but holds no values before selecting it. */
+ *  can see that a currency exists but holds no values before selecting it.
+ *
+ *  `selected` is the filter currently in force and is always present in the list,
+ *  whatever the server sent. A <select> whose value is missing from its own
+ *  options renders as the first option, so the control would read "All
+ *  currencies" while the request still filtered on the old one -- a filter that
+ *  looks switched off but is quietly still narrowing the table. Offering it with
+ *  a count of zero is the honest version of the same thing: the reader can see
+ *  the filter is applied and why it matches nothing. */
 export function currencyOptions(
   currencies: { currency: string; count: number }[] | undefined,
+  selected?: string,
 ): { value: string; label: string }[] {
+  const offered = currencies ?? []
+  const missing = selected && !offered.some((c) => c.currency === selected)
   return [
     { value: '', label: 'All currencies' },
-    ...(currencies ?? []).map((c) => ({
+    ...offered.map((c) => ({
       value: c.currency,
       label: `${currencyLabel(c.currency)} (${c.count})`,
     })),
+    ...(missing ? [{ value: selected, label: `${currencyLabel(selected)} (0)` }] : []),
   ]
 }

@@ -48,9 +48,13 @@ ai:
   relevant_page_strategy: "keyword"  # only send pages that look like financial statements
 
 confidence:
-  high: 0.95
-  medium: 0.80                     # below this => LOW / review
-  review_threshold: 0.80
+  # Confidence records how authoritative the page a figure was read from is,
+  # and nothing else -- label matching is exact, so it adds no term. The three
+  # values a figure can take are 1.0 (primary statement page), 0.9 (year zipped
+  # to a table header column) and 0.75 (notes or unsectioned page).
+  high: 0.90
+  medium: 0.75                     # below this => LOW / review
+  review_threshold: 0.80           # flags the 0.75 tier, i.e. notes-page readings
 
 validation:
   tolerance: 0.01                  # legacy relative tolerance

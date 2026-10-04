@@ -14,11 +14,17 @@ class TestLabelMapping:
         field, _ = map_label("Cash and cash equivalents", "balance_sheet")
         assert field == "cash_and_cash_equivalents"
 
-    def test_revenue_variants(self):
-        """'Pendapatan' labels are revenue."""
+    def test_revenue_field_is_gone(self):
+        """'Pendapatan' no longer maps anywhere.
+
+        The field it used to fill was deleted rather than kept as a fallback:
+        a bare 'Pendapatan' line is not the statement's exact top line, and
+        mapping it is how a figure ended up under a heading it never carried.
+        """
         for label in ("Pendapatan", "Pendapatan usaha", "Revenue", "Net revenue"):
-            field, _ = map_label(label, "income_statement")
-            assert field == "revenue", label
+            field, conf = map_label(label, "income_statement")
+            assert field is None, label
+            assert conf == 0.0, label
 
     def test_sales_variants(self):
         """'Penjualan' labels are sales, and sales is NOT revenue.
@@ -50,8 +56,8 @@ class TestLabelMapping:
         assert field == "retained_earnings"
 
     def test_with_footnote_markers(self):
-        field, _ = map_label("Pendapatan 23", "income_statement")
-        assert field == "revenue"
+        field, _ = map_label("Jumlah aset (1)", "balance_sheet")
+        assert field == "total_assets"
 
     def test_unknown_label(self):
         field, conf = map_label("Biaya peluang aneh sekali", "income_statement")
@@ -59,8 +65,8 @@ class TestLabelMapping:
         assert conf == 0.0
 
     def test_unit_annotation_stripped(self):
-        field, _ = map_label("Pendapatan (dalam jutaan Rupiah)", "income_statement")
-        assert field == "revenue"
+        field, _ = map_label("Jumlah aset (dalam jutaan Rupiah)", "balance_sheet")
+        assert field == "total_assets"
 
 
 class TestSplitWordLabels:
@@ -87,14 +93,22 @@ class TestSplitWordLabels:
         assert field == "current_liabilities"
 
     def test_clean_label_outranks_split_label(self):
-        """A clean label keeps full confidence so it wins the confidence tie-break."""
+        """Both resolve to the same field, and at the same confidence.
+
+        A word split across table cells is still that line item, so it is as
+        certain a mapping as the clean spelling. Scoring it lower used to look
+        like a hedge but bought nothing: the label either is the registered
+        wording or it is not, and which figure wins between competing readings
+        is settled by the page it came from, not by how the label was chopped
+        up in the source table.
+        """
         field, conf = map_label("Total aset tidak lancar", "balance_sheet")
         assert field == "non_current_assets"
         assert conf == 1.0
 
-    def test_split_scores_below_exact(self):
-        _, conf = map_label("Total aset tidak lan car", "balance_sheet")
-        assert 0.0 < conf < 1.0
+        split_field, split_conf = map_label("Total aset tidak lan car", "balance_sheet")
+        assert split_field == "non_current_assets"
+        assert split_conf == 1.0
 
     def test_genuinely_unknown_label_still_unmapped(self):
         """Collapsing spaces must not invent a match."""

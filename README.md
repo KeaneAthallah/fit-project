@@ -258,9 +258,11 @@ The Results page is the overview and the correction surface in one place.
   hand-entered from the start. A figure must belong to a report, so the row
   lists the reports for that company-year, preferring one that carries the same
   statement.
-- **All values tab** — the same figures as source rows, with raw label, page,
-  statement, confidence, and the audit trail. Clicking a grid cell jumps here
-  filtered to that company, year, and field.
+- **Results is the summary only** — one row per company-year, with the same
+  click-to-correct and click-to-add behaviour. The row-level audit trail (raw
+  label, page, statement, confidence, and edit history) lives on its own
+  **Values** page, which supports searching, sorting and filtering every
+  extracted figure.
 
 Corrections and added figures both survive re-processing. An edit is reattached
 to the extractor's row; an added figure is kept as its own row, because dropping

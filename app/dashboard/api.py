@@ -52,18 +52,21 @@ FIELD_TITLES: dict[str, str] = {
     "issued_and_paid_up_capital": "Issued and paid-up capital",
     "retained_earnings": "Retained earnings",
     "total_equity": "Total equity",
+    "equity_attributable_to_owners_of_parent": "Equity attributable to owners of parent",
     "total_liabilities_and_equity": "Total liabilities and equity",
-    "revenue": "Revenue",
     "sales": "Sales",
+    "sales_and_revenue": "Sales and revenue",
     "cost_of_revenue": "Cost of revenue",
     "gross_profit": "Gross profit",
     "operating_expenses": "Operating expenses",
     "operating_income": "Operating profit",
     "finance_income": "Finance income",
     "finance_costs": "Finance costs",
-    "profit_before_tax": "Profit before tax",
-    "income_tax": "Income tax",
+    "total_profit_loss_before_tax": "Total profit (loss) before income tax",
+    "total_profit_loss": "Total profit (loss)",
     "net_income": "Profit for the year",
+    "income_tax_paid_operating": "Income taxes refunded (paid) from operating activities",
+    "sub_sector": "Subsector",
     "cash_flow_operating": "Cash flow from operations",
     "cash_flow_investing": "Cash flow from investing",
     "cash_flow_financing": "Cash flow from financing",
@@ -92,17 +95,19 @@ FIELD_TITLES: dict[str, str] = {
 HEADLINE_FIELDS: tuple[str, ...] = (
     "total_assets",
     "total_equity",
+    "equity_attributable_to_owners_of_parent",
     "additional_paid_in_capital",
-    "revenue",
+    "sales_and_revenue",
     "sales",
-    "profit_before_tax",
+    "total_profit_loss_before_tax",
+    "total_profit_loss",
     "net_income",
-    "income_tax",
+    "income_tax_paid_operating",
 )
 
 ALL_FIELDS: frozenset[str] = frozenset(
     f for fields in FIELD_LABELS.values() for f in fields
-)
+) | {"sub_sector"}
 
 # field -> statement, first statement wins so a name reused across statements
 # resolves to the one that defines it.
@@ -123,6 +128,15 @@ DISPUTE_THRESHOLD = 0.5
 MAX_EXACT_INT = 2**53 - 1
 
 _FINDING_STATUSES = frozenset({"ERROR", "WARNING", "REVIEW_REQUIRED"})
+
+# The figure the "no loss" filter reads. Named rather than inlined so the filter
+# and the column a reader checks it against cannot drift apart.
+PROFIT_FIELD = "total_profit_loss"
+
+# Sentinel for "this company-year declares no sub-sector" in the filter and in the
+# facet list. A real value can never be the empty string, because that is what a
+# blank extraction is stored as, so it is free to mean "absent".
+SUB_NONE = "none"
 
 _DOC_SORT_COLUMNS = {
     "id", "company", "filename", "status", "page_count", "reporting_year",
@@ -295,6 +309,9 @@ def _summary_cell(
         "id": winner.id,
         "document_id": winner.document_id,
         "normalized_value": winner.normalized_value,
+        # A text field (the declared sub-sector) has no number to show, so the
+        # grid has to carry the string itself or the cell reads as empty.
+        "text_value": winner.text_value,
         "original_value": winner.original_value,
         "confidence": winner.confidence or 0.0,
         "status": winner.status,
@@ -400,6 +417,7 @@ def _value_dict(v: ExtractedValue) -> dict[str, Any]:
         "raw_label": v.raw_label,
         "raw_value": v.raw_value,
         "normalized_value": v.normalized_value,
+        "text_value": v.text_value,
         "currency": v.currency,
         "unit": v.unit,
         "page": v.page,
@@ -986,7 +1004,12 @@ def _summary_scope(
     company: str | None,
     year: int | None,
     currency: str | None,
-) -> tuple[list[dict[str, Any]], list[str], dict[str, str], list[dict[str, int]]]:
+    subsector: str | None = None,
+    profitable: bool = False,
+) -> tuple[
+    list[dict[str, Any]], list[str], dict[str, str],
+    list[dict[str, Any]], list[dict[str, Any]],
+]:
     """Every summary row the filters admit, plus its columns and labels.
 
     The grid and the Excel export both start here, so a downloaded workbook is
@@ -1010,6 +1033,35 @@ def _summary_scope(
 
     columns = _resolve_fields(fields, {v.field for v in scoped})
 
+    # The declared sub-sector is a sentence rather than a figure, so it is not one
+    # of the grid's columns: it travels as an attribute of the row. Every figure
+    # below keeps the same "one winner per company-year" rule so that a filter
+    # and the number shown beside it can never disagree about which reading won.
+    subsector_readings: dict[tuple[str, int | None], list[ExtractedValue]] = {}
+    profit_readings: dict[tuple[str, int | None], list[ExtractedValue]] = {}
+    for v in scoped:
+        if v.field == "sub_sector":
+            if (v.text_value or "").strip():
+                subsector_readings.setdefault((v.company, v.year), []).append(v)
+        elif v.field == PROFIT_FIELD:
+            profit_readings.setdefault((v.company, v.year), []).append(v)
+
+    subsector_of = {
+        key: (min(vs, key=_summary_rank).text_value or "").strip()
+        for key, vs in subsector_readings.items()
+    }
+    # Resolved independently of `columns`: the filter asks "was this year
+    # profitable", which is true whether or not the reader chose to display the
+    # profit column, and a filter that changed meaning with the column selection
+    # would be a trap.
+    profit_by_key = {
+        key: (winner.normalized_value or 0.0)
+        for key, winner in (
+            (key, min(vs, key=_summary_rank)) for key, vs in profit_readings.items()
+        )
+        if not currency or _currency_matches(winner.currency, currency)
+    }
+
     grouped: dict[tuple[str, int | None], dict[str, list[ExtractedValue]]] = {}
     for v in scoped:
         if v.field in columns:
@@ -1026,6 +1078,21 @@ def _summary_scope(
         if v.field in columns:
             key = v.currency or "none"
             currency_counts[key] = currency_counts.get(key, 0) + 1
+    if currency:
+        # The filter in force is always offered, even at a count of zero.
+        # Scoping the list to the other filters means a currency can drop out of
+        # it the moment the company changes, and a <select> whose value is not
+        # among its options renders as "All currencies" while the query still
+        # carries the old one: the control then shows no filter and the grid
+        # shows the filtered result. Reporting zero explains an empty table
+        # instead of denying that the filter is applied.
+        #
+        # Matched case-insensitively, because the filter itself is
+        # case-insensitive: seeding the literal spelling of `?currency=usd`
+        # would offer "usd (0)" beside the "USD (n)" it duplicates.
+        wanted = currency.strip().lower()
+        if not any(k.lower() == wanted for k in currency_counts):
+            currency_counts[currency.strip() if wanted == "none" else wanted.upper()] = 0
     currencies = [{"currency": k, "count": n}
                   for k, n in sorted(currency_counts.items())]
 
@@ -1066,6 +1133,7 @@ def _summary_scope(
             "company": comp,
             "year": yr,
             "currency": _row_currency(cells),
+            "subsector": subsector_of.get((comp, yr)),
             "cells": cells,
             # A value must belong to a document, so an empty cell needs a target.
             "documents": [
@@ -1081,9 +1149,43 @@ def _summary_scope(
 
     rows.sort(key=lambda r: (r["company"].lower(),
                              (1, 0) if r["year"] is None else (0, -r["year"])))
+
+    # "No loss" keeps the company-years whose net result is above zero. A year
+    # with no figure is not a pass: absence of a loss is not evidence of profit,
+    # and a row that merely failed to extract must not be counted as healthy.
+    if profitable:
+        rows = [
+            r for r in rows
+            if profit_by_key.get((r["company"], r["year"]), 0.0) > 0
+        ]
+
+    # Scoped the way the currency list is: it respects the other filters but not
+    # its own, or a sub-sector could only ever be chosen once.
+    subsector_counts: dict[str, int] = {}
+    for r in rows:
+        key = r["subsector"] or SUB_NONE
+        subsector_counts[key] = subsector_counts.get(key, 0) + 1
+    if subsector:
+        wanted = subsector.strip()
+        if wanted.lower() == SUB_NONE:
+            rows = [r for r in rows if not r["subsector"]]
+        else:
+            rows = [
+                r for r in rows
+                if (r["subsector"] or "").strip().lower() == wanted.lower()
+            ]
+        # The filter in force stays in the list even at zero, for the reason the
+        # currency list does the same: a <select> renders as its first option
+        # when its value is missing, which would show "All sub-sectors" while the
+        # query still narrowed the table.
+        if not any(k.lower() == wanted.lower() for k in subsector_counts):
+            subsector_counts[wanted if wanted.lower() != SUB_NONE else SUB_NONE] = 0
+    subsectors = [{"subsector": k, "count": n}
+                  for k, n in sorted(subsector_counts.items())]
+
     labels = {f: FIELD_TITLES.get(f, f.replace("_", " ").capitalize())
               for f in columns}
-    return rows, columns, labels, currencies
+    return rows, columns, labels, currencies, subsectors
 
 
 @router.get("/results/summary")
@@ -1093,17 +1195,21 @@ def results_summary(
     company: str | None = None,
     year: int | None = None,
     currency: str | None = None,
+    subsector: str | None = None,
+    profitable: bool = False,
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=500),
 ) -> dict[str, Any]:
-    rows, columns, labels, currencies = _summary_scope(
-        cfg, fields=fields, company=company, year=year, currency=currency
+    rows, columns, labels, currencies, subsectors = _summary_scope(
+        cfg, fields=fields, company=company, year=year, currency=currency,
+        subsector=subsector, profitable=profitable,
     )
     return {
         "items": _page_of(rows, page, page_size),
         "fields": columns,
         "labels": labels,
         "currencies": currencies,
+        "subsectors": subsectors,
         "pagination": _pagination(len(rows), page, page_size),
     }
 
@@ -1115,6 +1221,8 @@ def results_summary_export(
     company: str | None = None,
     year: int | None = None,
     currency: str | None = None,
+    subsector: str | None = None,
+    profitable: bool = False,
 ) -> Response:
     """The summary grid as a workbook, filtered exactly as the screen is.
 
@@ -1125,14 +1233,20 @@ def results_summary_export(
     """
     from app.export.excel import summary_grid_workbook
 
-    rows, columns, labels, _ = _summary_scope(
-        cfg, fields=fields, company=company, year=year, currency=currency
+    rows, columns, labels, _, _ = _summary_scope(
+        cfg, fields=fields, company=company, year=year, currency=currency,
+        subsector=subsector, profitable=profitable,
     )
     # The filters go into the workbook too: a file with no record of what it
     # was narrowed to cannot be checked against the screen it came from.
-    applied = {k: v for k, v in
-               (("company", company), ("year", year), ("currency", currency))
-               if v not in (None, "")}
+    applied: dict[str, Any] = {
+        k: v for k, v in
+        (("company", company), ("year", year), ("currency", currency),
+         ("subsector", subsector))
+        if v not in (None, "")
+    }
+    if profitable:
+        applied["profitable"] = "no net loss"
     body = summary_grid_workbook(rows, columns, labels, applied)
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M")
     return Response(
@@ -1227,9 +1341,16 @@ def dashboard_summary(cfg: AppConfig = Cfg) -> dict[str, Any]:
             by_category[c.category] = by_category.get(c.category, 0) + 1
 
     confs = [d.avg_confidence for d in docs if d.avg_confidence is not None]
-    low = sum(1 for v in values if (v.confidence or 0.0) < 0.5)
+# Counted against the configured threshold rather than a literal, so the
+    # "needs review" tally matches the flag written on the row.
+    review_below = cfg.confidence.review_threshold
+    low = sum(1 for v in values if (v.confidence or 0.0) < review_below)
 
-    buckets = [(0.0, 0.2), (0.2, 0.4), (0.4, 0.6), (0.6, 0.8), (0.8, 1.01)]
+    # Bucket edges follow the page-authority tiers, which are the only values a
+    # confidence can now take (1.0 statement page, 0.9 header-zipped, 0.75
+    # indirect). Evenly spaced 20% bins would put every real figure in one bin
+    # and render the chart useless.
+    buckets = [(0.0, 0.7), (0.7, 0.8), (0.8, 0.95), (0.95, 1.01)]
     histogram = []
     for lo, hi in buckets:
         n = sum(1 for v in values

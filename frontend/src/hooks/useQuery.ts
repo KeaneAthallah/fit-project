@@ -58,9 +58,11 @@ export function useQuery<T>(
         setError(err instanceof ApiError ? err.message : String(err))
       })
       .finally(() => {
-        // Cleared even when cancelled, otherwise a superseded request would
-        // leave the poller permanently blocked.
-        inFlight.current = false
+        // Ownership of the flag passes to whichever request is current, so a
+        // superseded request must leave it alone: clearing it here would let the
+        // poller start another request on top of the live one. The current
+        // request clears it when it settles, which is what unblocks the poller.
+        if (!cancelled) inFlight.current = false
         if (cancelled) return
         setLoading(false)
         setInitialLoading(false)

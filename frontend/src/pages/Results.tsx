@@ -1,21 +1,20 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
-import { useAction, useDebounced, useLiveRefresh, useQuery } from '../hooks/useQuery'
+import { useAction, useLiveRefresh, useQuery } from '../hooks/useQuery'
 import type { QueryState } from '../hooks/useQuery'
 import { useProcessing } from '../lib/processing-context'
 import { useUrlFilters } from '../hooks/useFilters'
 import { currencyLabel, currencyOptions, num, rupiah, titleCase } from '../lib/format'
 import { companyPath } from '../lib/paths'
 import type {
-  ExtractedValue,
   ProcessingState,
   ResultsCoverage,
   SummaryCandidate,
   SummaryCell,
   SummaryDocument,
 } from '../lib/types'
-import { Confidence, ValueStatusBadge } from '../components/badges'
+import { Confidence } from '../components/badges'
 import {
   Alert,
   Badge,
@@ -30,35 +29,19 @@ import {
   Select,
   SkeletonTable,
   Table,
-  Tabs,
   Td,
   Th,
 } from '../components/ui'
 
-const FILTER_KEYS = [
-  'view',
-  'search',
-  'company',
-  'year',
-  'statement',
-  'field',
-  'status',
-  'currency',
-  'sort',
-  'order',
-  'page',
-] as const
+const FILTER_KEYS = ['company', 'year', 'currency', 'page'] as const
+
+// The keys that are genuinely filters. `page` is pagination rather than a
+// filter, so counting it would tell the reader they have a filter applied when
+// they have not, and "Clear N filters" would throw away their place in the
+// results along with the filters.
+const CLEARABLE_KEYS = ['company', 'year', 'currency'] as const
 
 const PAGE_SIZE = 50
-
-const STATUS_OPTIONS = [
-  { value: '', label: 'Any status' },
-  { value: 'REVIEW_REQUIRED', label: 'Needs review' },
-  { value: 'OK', label: 'Accepted' },
-]
-
-type SortKey = 'company' | 'field' | 'year' | 'value' | 'confidence'
-type View = 'summary' | 'values'
 
 /**
  * Accepts a plain number and tolerates thousands separators.
@@ -67,152 +50,29 @@ type View = 'summary' | 'values'
  * guess at whether "1.500.000" means one and a half million or fifteen hundred
  * million is exactly the kind of ambiguity a financial field must not have.
  * Anything else is rejected rather than guessed.
+ *
+ * A decimal part is allowed and required to be there when the stored figure has
+ * one: the extractor keeps every digit it read, so `31635083104.74` is a real
+ * row that has to be correctable, not just readable.
  */
 function parseAmount(input: string): { value: number } | { error: string } {
   const trimmed = input.trim()
   // Empty means "this figure is not present", which the API models as null.
   // It is deliberately not the same as zero.
   if (trimmed === '') return { value: Number.NaN }
-  if (!/^-?[0-9][0-9,]*$/.test(trimmed)) {
-    return { error: 'Enter digits only, optionally separated by commas.' }
+  if (!/^-?[0-9][0-9,]*(\.[0-9]+)?$/.test(trimmed)) {
+    return {
+      error: 'Enter digits only, with an optional decimal part. Commas group thousands.',
+    }
   }
-  const cleaned = trimmed.replace(/,/g, '')
-  if (!Number.isSafeInteger(Number(cleaned.replace('-', '')))) {
+  const value = Number(trimmed.replace(/,/g, ''))
+  // Magnitude rather than `isSafeInteger`, which would reject the fractional
+  // figures this field exists to correct. The API stores `int | float`, and a
+  // value past MAX_SAFE_INTEGER has already lost the digits that matter.
+  if (!Number.isFinite(value) || Math.abs(value) > Number.MAX_SAFE_INTEGER) {
     return { error: 'That number is too large to be stored safely.' }
   }
-  return { value: Number(cleaned) }
-}
-
-function EditRow({
-  value,
-  onDone,
-}: {
-  value: ExtractedValue
-  onDone: (row: ExtractedValue) => void
-}) {
-  const [amount, setAmount] = useState(
-    value.normalized_value === null ? '' : String(value.normalized_value),
-  )
-  const [note, setNote] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const amountRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    amountRef.current?.focus()
-    amountRef.current?.select()
-  }, [])
-
-  const save = useAction(async (body: Parameters<typeof api.updateValue>[1]) =>
-    api.updateValue(value.id, body),
-  )
-
-  const submit = (e: React.FormEvent) => {
-    e.preventDefault()
-    const parsed = parseAmount(amount)
-    if ('error' in parsed) {
-      setError(parsed.error)
-      return
-    }
-    setError(null)
-    // Number.NaN is how parseAmount signals "clear the figure"; JSON.stringify
-    // turns it into null, which is exactly what the API wants.
-    void save
-      .run({ normalized_value: parsed.value, note: note.trim() || undefined })
-      .then((res) => {
-        if (res) onDone(res.value)
-      })
-  }
-
-  return (
-    <tr>
-      <td colSpan={8} className="border-b border-border bg-muted/50 px-4 py-3">
-        <form onSubmit={submit} className="flex flex-col gap-3">
-          <div className="grid gap-3 sm:grid-cols-2 lg:max-w-3xl">
-            <Input
-              ref={amountRef}
-              label="Corrected amount (full rupiah)"
-              hint={
-                value.normalized_value === null
-                  ? 'Currently empty. Clear the field to leave it empty.'
-                  : `Extractor read ${value.normalized_value.toLocaleString('id-ID')}.`
-              }
-              inputMode="numeric"
-              autoComplete="off"
-              spellCheck={false}
-              value={amount}
-              onChange={(e) => {
-                setAmount(e.target.value)
-                setError(null)
-              }}
-              aria-invalid={error ? true : undefined}
-              className="tnum font-mono"
-            />
-            <Input
-              label="Why (optional)"
-              hint="Kept on the row so the change is auditable later."
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              placeholder="e.g. mis-scaled on the highlights page"
-              maxLength={200}
-            />
-          </div>
-
-          {error && (
-            <Alert tone="danger" className="lg:max-w-3xl">
-              {error}
-            </Alert>
-          )}
-          {save.error && <ErrorBanner message={save.error} onRetry={save.reset} />}
-
-          <div className="flex flex-wrap items-center gap-2">
-            <Button type="submit" variant="primary" size="sm" pending={save.pending}>
-              Save correction
-            </Button>
-            <Button type="button" variant="secondary" size="sm" onClick={() => onDone(value)}>
-              Cancel
-            </Button>
-            {value.is_edited && value.original_value !== null && (
-              <span className="text-xs text-muted-foreground">
-                Extractor originally read {rupiah(value.original_value)}
-              </span>
-            )}
-          </div>
-        </form>
-      </td>
-    </tr>
-  )
-}
-
-function RevertButton({
-  value,
-  onDone,
-}: {
-  value: ExtractedValue
-  onDone: (row: ExtractedValue) => void
-}) {
-  const revert = useAction(() => api.updateValue(value.id, { revert: true }))
-  return (
-    <>
-      <Button
-        size="sm"
-        variant="ghost"
-        pending={revert.pending}
-        onClick={() => void revert.run().then((r) => r && onDone(r.value))}
-        title={
-          value.original_value === null
-            ? "Restore the extractor's reading"
-            : `Restore ${rupiah(value.original_value)}`
-        }
-      >
-        Revert
-      </Button>
-      {revert.error && (
-        <span className="sr-only" role="alert">
-          {revert.error}
-        </span>
-      )}
-    </>
-  )
+  return { value }
 }
 
 /** One figure in the grid.
@@ -820,7 +680,7 @@ function DisputeChooser({
           </div>
 
           {error && (
-            <p className="mt-2 text-red-700">
+            <p className="mt-2 text-xs text-danger-soft-foreground">
               {typeof error === 'string' ? error : 'Could not save.'}
             </p>
           )}
@@ -1067,10 +927,7 @@ function SummaryGrid({
             ...companies.map((c) => ({ value: c.company, label: c.company })),
           ]}
           value={values.company}
-          onChange={(e) => {
-            setParam('company', e.target.value)
-            setParam('page', '1')
-          }}
+          onChange={(e) => setParam('company', e.target.value)}
         />
         <Select
           label="Year"
@@ -1079,10 +936,7 @@ function SummaryGrid({
             ...years.map((y) => ({ value: y, label: y })),
           ]}
           value={values.year}
-          onChange={(e) => {
-            setParam('year', e.target.value)
-            setParam('page', '1')
-          }}
+          onChange={(e) => setParam('year', e.target.value)}
         />
         <Select
           label="Currency"
@@ -1090,12 +944,9 @@ function SummaryGrid({
           // Prefer the summary's own list, which only offers currencies the
           // displayed columns can match; fall back to the global facets so the
           // control is never empty.
-          options={currencyOptions(data?.currencies ?? globalCurrencies)}
+          options={currencyOptions(data?.currencies ?? globalCurrencies, values.currency)}
           value={values.currency}
-          onChange={(e) => {
-            setParam('currency', e.target.value)
-            setParam('page', '1')
-          }}
+          onChange={(e) => setParam('currency', e.target.value)}
         />
       </div>
 
@@ -1305,6 +1156,13 @@ function SummaryGrid({
                       {open !== null &&
                         (open.mode === 'dispute' ? (
                           <DisputeChooser
+                            // Keyed by the cell it is editing. Without this the two
+                            // editors share one slot in this row, so opening a
+                            // second figure in the same row would reuse the open
+                            // instance and keep its amount, note and selection
+                            // while `cell` had already moved on -- and saving would
+                            // then write one figure's value over another.
+                            key={`dispute:${rowKey}:${open.field}`}
                             colSpan={3 + data.fields.length}
                             cell={open.cell}
                             company={open.company}
@@ -1318,6 +1176,7 @@ function SummaryGrid({
                           />
                         ) : (
                           <CellForm
+                            key={`edit:${rowKey}:${open.field}`}
                             cell={open.cell}
                             mode={open.mode}
                             colSpan={3 + data.fields.length}
@@ -1352,117 +1211,17 @@ function SummaryGrid({
 }
 
 export default function Results() {
-  const { get, setParam, clearAll, values, activeCount } = useUrlFilters(FILTER_KEYS)
-  const view = (get('view') || 'summary') as View
-  const page = Number(get('page') || '1')
-  const debouncedSearch = useDebounced(get('search'))
-
+  const { setParam, clearAll, values, activeCount } = useUrlFilters(FILTER_KEYS, {
+    clearable: CLEARABLE_KEYS,
+  })
   const facets = useQuery(() => api.valueFacets(), [])
   const companies = useQuery(() => api.companies(), [])
-
-  const sort = (get('sort') || 'company') as SortKey
-  const order = (get('order') || 'asc') as 'asc' | 'desc'
-
-  const params = useMemo(
-    () => ({
-      search: debouncedSearch,
-      company: values.company,
-      year: values.year,
-      statement: values.statement,
-      field: values.field,
-      status: values.status,
-      currency: values.currency,
-      sort,
-      order,
-      page,
-      page_size: PAGE_SIZE,
-    }),
-    [values, debouncedSearch, sort, order, page],
-  )
-
-  // The list view is only fetched when it is on screen: the summary grid is the
-  // landing view, and 877 rows of values behind it are not worth the round trip.
-  const { data, error, initialLoading, refetch } = useQuery(
-    () => (view === 'values' ? api.values(params) : Promise.resolve(null)),
-    [JSON.stringify(params), view],
-  )
-
-  const [patched, setPatched] = useState<Record<number, ExtractedValue>>({})
-  const applyServerRow = useCallback(
-    (row: ExtractedValue) => setPatched((prev) => ({ ...prev, [row.id]: row })),
-    [],
-  )
-
-  // Only patches for rows on this page are consulted, so entries left behind
-  // by earlier pages are inert rather than stale data on screen.
-  const rows = useMemo(() => {
-    const items = data?.items ?? []
-    return items.map((v) => patched[v.id] ?? v)
-  }, [data, patched])
-
-  const [editingId, setEditingId] = useState<number | null>(null)
-  // A correction writes to a row this table owns, so the server's copy of just
-  // that row is patched in. A refetch would also work, but it throws away
-  // scroll position and re-queries every active filter.
-  const afterEdit = useCallback(
-    (row: ExtractedValue) => {
-      applyServerRow(row)
-      setEditingId(null)
-    },
-    [applyServerRow],
-  )
-
-  const applySort = (key: SortKey) => {
-    setParam('sort', key)
-    setParam('order', sort === key && order === 'asc' ? 'desc' : 'asc')
-    setParam('page', '1')
-  }
-
-  const statementOptions = [
-    { value: '', label: 'All statements' },
-    ...(facets.data?.statements ?? []).map((s) => ({
-      value: s.statement,
-      label: titleCase(s.statement),
-      count: s.count,
-    })),
-  ]
-
-  const fieldOptions = [
-    { value: '', label: 'All fields' },
-    ...(facets.data?.fields ?? []).map((f) => ({
-      value: f.field,
-      label: titleCase(f.field),
-      count: f.count,
-    })),
-  ]
-
-  const yearOptions = [
-    { value: '', label: 'All years' },
-    ...(facets.data?.years ?? []).map((y) => ({ value: String(y), label: String(y) })),
-  ]
-
-  const companyOptions = [
-    { value: '', label: 'All companies' },
-    ...(companies.data?.items ?? []).map((c) => ({ value: c.company, label: c.company })),
-  ]
-
-  const editedCount = rows.filter((r) => r.is_edited).length
 
   return (
     <>
       <PageHeader
         title="Results"
-        subtitle="Headline figures per company-year, and every extracted value behind them. Click any amount to correct it."
-      />
-
-      <Tabs
-        className="mb-4"
-        tabs={[
-          { key: 'summary' as View, label: 'Summary' },
-          { key: 'values' as View, label: 'All values' },
-        ]}
-        active={view}
-        onChange={(key) => setParam('view', key)}
+        subtitle="Headline figures per company-year. Click any amount to correct it."
       />
 
       <Alert tone="info" className="mb-4">
@@ -1471,220 +1230,21 @@ export default function Results() {
         but a document&apos;s validation checks are not recomputed automatically.
       </Alert>
 
-      {view === 'summary' ? (
-        <SummaryGrid
-          companies={companies.data?.items ?? []}
-          globalCurrencies={facets.data?.currencies}
-          setParam={setParam}
-          values={values}
-          years={(facets.data?.years ?? []).map(String)}
-        />
-      ) : (
-        <>
-          <Card className="mb-4">
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-              <Input
-                label="Search"
-                placeholder="Field, label or company"
-                value={get('search')}
-                onChange={(e) => setParam('search', e.target.value)}
-              />
-              <Select
-                label="Company"
-                options={companyOptions}
-                value={values.company}
-                onChange={(e) => setParam('company', e.target.value)}
-              />
-              <Select
-                label="Year"
-                options={yearOptions}
-                value={values.year}
-                onChange={(e) => setParam('year', e.target.value)}
-              />
-              <Select
-                label="Statement"
-                options={statementOptions}
-                value={values.statement}
-                onChange={(e) => setParam('statement', e.target.value)}
-              />
-              <Select
-                label="Field"
-                options={fieldOptions}
-                value={values.field}
-                onChange={(e) => setParam('field', e.target.value)}
-              />
-              <Select
-                label="Status"
-                options={STATUS_OPTIONS}
-                value={values.status}
-                onChange={(e) => setParam('status', e.target.value)}
-              />
-              <Select
-                label="Currency"
-                options={currencyOptions(facets.data?.currencies)}
-                value={values.currency}
-                onChange={(e) => setParam('currency', e.target.value)}
-              />
-            </div>
-            {activeCount > 0 && (
-              <div className="mt-4 flex items-center border-t border-border pt-3">
-                <Button size="sm" variant="ghost" onClick={clearAll}>
-                  Clear {activeCount} filter{activeCount === 1 ? '' : 's'}
-                </Button>
-              </div>
-            )}
-          </Card>
-
-          {error && <ErrorBanner message={error} onRetry={refetch} />}
-
-          <Card padded={false}>
-            {initialLoading ? (
-              <div className="p-4">
-                <SkeletonTable rows={10} cols={7} />
-              </div>
-            ) : rows.length === 0 ? (
-              <EmptyState
-                title="No results match"
-                hint="Adjust the filters, or process more documents from the dashboard."
-              />
-            ) : (
-              <>
-                <Table caption="Extracted result values">
-                  <thead>
-                    <tr>
-                      <Th
-                        onSort={() => applySort('company')}
-                        sorted={sort === 'company' ? order : false}
-                      >
-                        Company
-                      </Th>
-                      <Th hideBelow="sm" onSort={() => applySort('year')} sorted={sort === 'year' ? order : false}>
-                        Year
-                      </Th>
-                      <Th onSort={() => applySort('field')}>Field</Th>
-                      <Th
-                        hideBelow="md"
-                        onSort={() => applySort('value')}
-                        sorted={sort === 'value' ? order : false}
-                      >
-                        Value
-                      </Th>
-                      <Th hideBelow="lg">Source</Th>
-                      <Th
-                        hideBelow="xl"
-                        onSort={() => applySort('confidence')}
-                        sorted={sort === 'confidence' ? order : false}
-                      >
-                        Confidence
-                      </Th>
-                      <Th hideBelow="lg">Status</Th>
-                      <Th align="right">Correct</Th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((v) => {
-                      const open = editingId === v.id
-                      return (
-                        <Fragment key={v.id}>
-                          <tr className="transition-colors hover:bg-accent/40">
-                            <Td className="max-w-48 text-xs">
-                              <Link
-                                to={`/documents/${v.document_id}`}
-                                className="block truncate font-medium text-foreground hover:text-primary hover:underline"
-                                title={v.company}
-                              >
-                                {v.company}
-                              </Link>
-                            </Td>
-                            <Td hideBelow="sm" mono>
-                              {v.year ?? '-'}
-                            </Td>
-                            <Td className="max-w-56 text-xs">
-                              <span className="block truncate font-medium text-foreground" title={v.field}>
-                                {titleCase(v.field)}
-                              </span>
-                              {v.edit_note && (
-                                <span className="mt-0.5 block truncate text-xs text-muted-foreground" title={v.edit_note}>
-                                  {v.edit_note}
-                                </span>
-                              )}
-                            </Td>
-                            <Td hideBelow="md" align="right">
-                              <button
-                                type="button"
-                                onClick={() => setEditingId(open ? null : v.id)}
-                                aria-expanded={open}
-                                title="Correct this value"
-                                className="tnum -mr-1 inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 font-mono text-sm font-semibold text-foreground hover:bg-accent hover:text-primary"
-                              >
-                                {rupiah(v.normalized_value)}
-                                <svg
-                                  viewBox="0 0 24 24"
-                                  className="h-3 w-3 shrink-0 text-muted-foreground"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  strokeWidth="2"
-                                  aria-hidden
-                                >
-                                  <path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16v4z" strokeLinejoin="round" />
-                                </svg>
-                              </button>
-                              {v.is_edited && (
-                                <Badge tone="accent" className="mt-1">
-                                  Edited
-                                </Badge>
-                              )}
-                            </Td>
-                            <Td hideBelow="lg" className="max-w-52 text-xs">
-                              <span className="block truncate text-muted-foreground" title={v.raw_label ?? undefined}>
-                                {v.raw_label ?? '-'}
-                              </span>
-                              <span className="mt-0.5 block text-xs text-muted-foreground/80">
-                                p{v.page ?? '-'} &middot; {titleCase(v.statement)}
-                              </span>
-                            </Td>
-                            <Td hideBelow="xl">
-                              <Confidence value={v.confidence} />
-                            </Td>
-                            <Td hideBelow="lg">
-                              <ValueStatusBadge status={v.status} />
-                            </Td>
-                            <Td align="right">
-                              {v.is_edited ? (
-                                <RevertButton value={v} onDone={afterEdit} />
-                              ) : (
-                                <Button size="sm" variant="ghost" onClick={() => setEditingId(v.id)}>
-                                  Edit
-                                </Button>
-                              )}
-                            </Td>
-                          </tr>
-                          {open && <EditRow value={v} onDone={afterEdit} />}
-                        </Fragment>
-                      )
-                    })}
-                  </tbody>
-                </Table>
-
-                <Pagination
-                  page={data!.pagination.page}
-                  pages={data!.pagination.pages}
-                  total={data!.pagination.total}
-                  pageSize={data!.pagination.page_size}
-                  onPage={(p) => setParam('page', String(p))}
-                />
-              </>
-            )}
-          </Card>
-
-          {editedCount > 0 && (
-            <p className="mt-3 text-xs text-muted-foreground">
-              {num(editedCount)} value{editedCount === 1 ? '' : 's'} on this page{' '}
-              {editedCount === 1 ? 'has' : 'have'} been corrected.
-            </p>
-          )}
-        </>
+      {activeCount > 0 && (
+        <div className="mb-3 flex justify-end">
+          <Button size="sm" variant="ghost" onClick={clearAll}>
+            Clear {activeCount} filter{activeCount === 1 ? '' : 's'}
+          </Button>
+        </div>
       )}
+
+      <SummaryGrid
+        companies={companies.data?.items ?? []}
+        globalCurrencies={facets.data?.currencies}
+        setParam={setParam}
+        values={values}
+        years={(facets.data?.years ?? []).map(String)}
+      />
     </>
   )
 }

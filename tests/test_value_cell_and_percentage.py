@@ -97,7 +97,7 @@ class TestGrossProfitSignPresentation:
         from app.financial.validators import validate_document
         values = {
             "income_statement": {
-                "revenue": {"normalized_value": rev},
+                "sales_and_revenue": {"normalized_value": rev},
                 "cost_of_revenue": {"normalized_value": cost},
                 "gross_profit": {"normalized_value": gp},
             },

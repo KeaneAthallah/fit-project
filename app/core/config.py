@@ -65,9 +65,16 @@ class AIConfig:
 
 @dataclass
 class ConfidenceConfig:
+    # Mirrors the page-authority scale in `pipeline.processor.page_confidence`
+    # (1.0 primary statement page, 0.9 header-zipped, 0.75 indirect). `high` and
+    # `medium` label those tiers; they are not further gradations.
     high: float = 0.90
     medium: float = 0.75
-    review_threshold: float = 0.50  # below this -> REVIEW_REQUIRED (never ERROR)
+    # Below this -> REVIEW_REQUIRED (never ERROR). Set above the indirect tier so
+    # a figure read off a notes or unsectioned page is actually flagged. At the
+    # old 0.50 nothing could ever fall below it, because label matching was the
+    # only thing that moved the number and it now always resolves to 1.0.
+    review_threshold: float = 0.85
 
 
 @dataclass

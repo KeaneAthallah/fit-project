@@ -23,7 +23,8 @@ from app.extraction.table_extractor import (
     is_prose_label,
     order_header_years,
 )
-from app.export.csv_export import PLAUSIBLE_MIN_ABS, _flag
+from app.export.csv_export import _flag
+from app.financial.plausibility import minimum_plausible_monetary
 from app.pipeline.processor import DocumentProcessor
 
 
@@ -235,7 +236,8 @@ class TestExportPlausibilityFlags:
 
     def test_tiny_amount_flagged(self):
         # 72 juta: above a naive 1e6 floor, still nonsense for a listed company.
-        assert _flag(72_000_000, "juta", "revenue") == "IMPLAUSIBLE_MAGNITUDE"
+        assert _flag(72_000_000, "juta", "sales_and_revenue", "IDR") == (
+            "IMPLAUSIBLE_MAGNITUDE")
 
     def test_plausible_amount_not_flagged(self):
         assert _flag(27_781_231_000_000, "juta", "total_assets") == ""
@@ -247,8 +249,10 @@ class TestExportPlausibilityFlags:
         assert _flag(-1_179_794_000_000, "juta", "cost_of_revenue") == ""
 
     def test_threshold_boundary(self):
-        assert _flag(PLAUSIBLE_MIN_ABS, "juta", "revenue") == ""
-        assert _flag(PLAUSIBLE_MIN_ABS - 1, "juta", "revenue") == "IMPLAUSIBLE_MAGNITUDE"
+        floor = minimum_plausible_monetary("IDR", "juta")
+        assert _flag(floor, "juta", "sales_and_revenue", "IDR") == ""
+        assert _flag(floor - 1, "juta", "sales_and_revenue", "IDR") == (
+            "IMPLAUSIBLE_MAGNITUDE")
 
     def test_share_counts_exempt_from_monetary_floor(self):
         """500,000 treasury shares is correct, not a misparse."""
@@ -256,6 +260,57 @@ class TestExportPlausibilityFlags:
 
     def test_percentages_exempt(self):
         assert _flag(1.5, "percent", "treasury_shares_percentage") == ""
+
+
+class TestFloorIsCurrencyAndScaleAware:
+    """The floor used to be one rupiah constant applied to everything.
+
+    That flagged correct figures: a -$122.9m annual loss is ordinary for a
+    listed company, and a filer reporting in whole rupiah legitimately shows a
+    non-controlling interest of 19,757. Both were marked IMPLAUSIBLE.
+    """
+
+    def test_usd_loss_is_not_judged_against_a_rupiah_floor(self):
+        """PMMP 2024 total_profit_loss, verbatim from the corpus."""
+        assert _flag(-122_921_818, None, "total_profit_loss", "USD") == ""
+
+    def test_whole_rupiah_report_has_no_floor(self):
+        """A filer stating plain rupiah has no multiplier to have mis-read."""
+        assert _flag(19_757, None, "non_controlling_interest", "IDR") == ""
+        assert _flag(1_000, None, "non_controlling_interest", "IDR") == ""
+
+    def test_small_scaled_figure_is_still_real(self):
+        """'(848,687)' ribu is 848,687,000 -- a real, if small, tax payment.
+
+        A row read at a stated scale is still held to its currency's floor, so
+        this one is flagged. That is the conservative side of the trade: the
+        floor for scaled rows was left alone deliberately, because 897 juta and
+        999 juta are the same order of magnitude and no magnitude alone tells
+        them apart. Distinguishing them needs a per-field floor.
+        """
+        assert _flag(848_687_000, "ribuan", "income_tax_paid_operating", "IDR") == (
+            "IMPLAUSIBLE_MAGNITUDE")
+
+    def test_a_figure_that_lost_a_factor_is_still_caught(self):
+        """'0.897' read as juta is 897,000 -- the raw had no integer part."""
+        assert _flag(897_000, "juta", "other_equity_components", "IDR") == (
+            "IMPLAUSIBLE_MAGNITUDE")
+
+    def test_ceiling_is_unaffected_by_currency(self):
+        """A unit applied too many times is wrong in any currency."""
+        assert _flag(2e17, "juta", "total_assets", "IDR") == "IMPLAUSIBLE_SCALE"
+        assert _flag(2e17, "juta", "total_assets", "USD") == "IMPLAUSIBLE_SCALE"
+
+    def test_plain_unit_rows_still_reject_fragments(self):
+        """Dropping the rupiah floor must not open the door to page numbers."""
+        assert minimum_plausible_monetary("IDR", None) == 1_000.0
+        assert _flag(37, None, "cash_and_cash_equivalents", "IDR") == (
+            "IMPLAUSIBLE_MAGNITUDE")
+        assert _flag(5e17, None, "cash_and_cash_equivalents", "IDR") == (
+            "IMPLAUSIBLE_SCALE")
+
+    def test_zero_is_never_implausible(self):
+        assert _flag(0, None, "non_controlling_interest", "IDR") == ""
 
 
 if __name__ == "__main__":

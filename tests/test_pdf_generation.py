@@ -39,7 +39,7 @@ LAPORAN LABA RUGI
 Untuk Tahun Yang Berakhir 31 Desember 2024
 (Dalam jutaan Rupiah)
 
-Pendapatan                     120.000     100.000
+Penjualan dan pendapatan usaha  120.000     100.000
 Beban Pokok Pendapatan          80.000      65.000
 Laba Kotor                      40.000      35.000
 Laba Tahun Berjalan              8.000       6.000
@@ -120,7 +120,7 @@ class TestTextPdfPipeline:
             values = repo.all_values()
             fields = {v.field for v in values}
             assert "total_assets" in fields
-            assert "revenue" in fields
+            assert "sales_and_revenue" in fields
             ta = {v for v in values if v.field == "total_assets"}
             # Multi-year: both 2024 and 2023 observations exist
             years = {v.year for v in ta}

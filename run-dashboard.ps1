@@ -5,12 +5,17 @@
 .DESCRIPTION
     Two modes:
 
-      Production (default) - one process. FastAPI serves the built SPA from
-      frontend/dist and the JSON API from the same origin, so the whole app
-      lives on a single port.
+      Hot reload (default) - two processes on the same public port you already
+      use. Vite owns -Port and serves the SPA with HMR, proxying /api to FastAPI
+      on an internal port that runs with uvicorn's reloader. Editing anything
+      under app/ or frontend/src/ takes effect immediately, with no restart and
+      therefore no new tunnel URL. The URL is only ever changed by restarting
+      the script, so a bookmark or shared link keeps working.
 
-      -Dev - two processes. Vite serves the SPA on one port with HMR and proxies
-      /api to FastAPI on 8000.
+      -Production - one process. FastAPI serves the prebuilt bundle from
+      frontend/dist and the JSON API from the same origin. Use this to check the
+      real build, or on a machine with no Node toolchain. Edits need a rebuild
+      (and -ForceRebuild, since an existing dist is otherwise reused).
 
     In both modes a Cloudflare quick tunnel is started and the random
     https://<random>.trycloudflare.com URL is printed and saved.
@@ -18,11 +23,16 @@
     Press Ctrl+C to stop everything.
 
 .PARAMETER Port
-    Port for the FastAPI server. Also the tunnel target in production mode.
+    The public port: the one you open in the browser and the one the tunnel
+    points at. Unchanged by the mode, so the URL does not move.
+
+.PARAMETER Production
+    Serve the built bundle from FastAPI instead of running the dev server. No
+    hot reload.
 
 .PARAMETER Dev
-    Use the Vite dev server instead of the built bundle. The tunnel then points
-    at the Vite port instead.
+    Deprecated and ignored. Hot reload is now the default; -Production is the
+    opposite of what -Dev used to mean, so pass that instead.
 
 .PARAMETER ForceRebuild
     Run `npm run build` even if frontend/dist already exists.
@@ -35,7 +45,7 @@
 
 .EXAMPLE
     ./run-dashboard.ps1
-    ./run-dashboard.ps1 -Dev
+    ./run-dashboard.ps1 -Production
     ./run-dashboard.ps1 -NoTunnel
 #>
 [CmdletBinding()]
@@ -43,6 +53,7 @@ param(
     [ValidateRange(1, 65535)]
     [int]$Port = 8000,
 
+    [switch]$Production,
     [switch]$Dev,
     [switch]$ForceRebuild,
     [switch]$NoTunnel,
@@ -51,11 +62,25 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Hot reload unless the caller explicitly asked for the built bundle. -Dev used
+# to select this and is kept only so an old command line does not silently do
+# the opposite of what it says.
+$HotReload = -not $Production
+if ($Dev -and $Production) {
+    throw '-Dev and -Production ask for opposite things. -Dev is now the default, so drop it.'
+}
+
 $RepoRoot    = Split-Path -Parent $PSCommandPath
 $FrontendDir = Join-Path $RepoRoot 'frontend'
 $DistIndex   = Join-Path $FrontendDir 'dist\index.html'
 $LogDir      = Join-Path $RepoRoot 'logs'
-$VitePort    = 5173
+
+# The port the browser and the tunnel use, in both modes.
+$PublicPort  = $Port
+# Where FastAPI listens. In production that is the public port; with hot reload
+# Vite has to own it, so the API moves behind the proxy and takes a free port of
+# its own, resolved once the helpers below are defined.
+$ApiPort     = $Port
 
 $children = @()   # every process started here, torn down on exit
 
@@ -63,6 +88,32 @@ function Write-Step { param([string]$m) Write-Host "==> $m" -ForegroundColor Cya
 function Write-Ok   { param([string]$m) Write-Host "    $m" -ForegroundColor Green }
 function Write-Warn { param([string]$m) Write-Host "    $m" -ForegroundColor Yellow }
 function Write-Fail { param([string]$m) Write-Host "    $m" -ForegroundColor Red }
+
+# An unused TCP port on the loopback interface. The API port is internal and
+# never typed by hand, so letting the OS pick it removes any chance of
+# colliding with something already listening on the usual +1 guess.
+function Get-FreePort {
+    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+    $listener.Start()
+    try { return ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port }
+    finally { $listener.Stop() }
+}
+
+# True when something is already listening. Vite runs with --strictPort so it
+# fails loudly rather than quietly sliding to another port and breaking the one
+# URL that is meant to stay put.
+function Test-PortBusy {
+    param([int]$CheckPort)
+    $client = [System.Net.Sockets.TcpClient]::new()
+    try {
+        $task = $client.ConnectAsync('127.0.0.1', $CheckPort)
+        return $task.Wait(500) -and $client.Connected
+    } catch {
+        return $false
+    } finally {
+        $client.Dispose()
+    }
+}
 
 # Poll an HTTP endpoint until it answers 200. Starting a server and immediately
 # curling it is a race; this removes the race instead of guessing a sleep.
@@ -197,7 +248,9 @@ Write-Ok "python: $python"
 
 # ------------------------------------------------------------------ frontend
 
-if ($Dev) {
+if ($HotReload) {
+    # Nothing to build: the dev server compiles on demand and pushes updates
+    # over HMR, which is the whole reason this mode needs no restart.
     if (-not (Test-Path (Join-Path $FrontendDir 'node_modules'))) {
         Write-Step 'Installing npm dependencies'
         $npm = Get-NpmCmd
@@ -231,29 +284,63 @@ $urlFile  = Join-Path $LogDir 'dashboard-url.txt'
 
 Remove-Item $tunOut, $tunErr, $urlFile -ErrorAction SilentlyContinue
 
+# Preflight, deliberately outside the try: if the public port is taken we must
+# bail out without reaching the teardown below, which would otherwise sweep up
+# the very process we just complained about. Refusing to start must never be the
+# thing that stops what is already running.
+if (Test-PortBusy -CheckPort $PublicPort) {
+    throw "Port $PublicPort is already in use. Stop whatever is listening there, or pass -Port <n>."
+}
+
+if ($HotReload) {
+    # Picked up front rather than passed as --port 0: the port has to be known to
+    # configure the dev server's proxy and to tell the reader where the API is,
+    # and a port the OS chose at bind time is announced too late for either.
+    $ApiPort = Get-FreePort
+    Write-Ok "api port: $ApiPort (internal, proxied by Vite on :$PublicPort)"
+}
+
 try {
-    $apiArgs = @('main.py', 'dashboard', '--host', '127.0.0.1', '--port', "$Port")
+    $apiArgs = @('main.py', 'dashboard', '--host', '127.0.0.1', '--port', "$ApiPort")
+    if ($HotReload) {
+        # The reloader is what makes a backend edit take effect on its own.
+        $apiArgs += '--reload'
+    }
+
     $apiProc = Start-Child -FilePath $python -ArgumentList $apiArgs `
-        -WorkingDirectory $RepoRoot -Name "FastAPI on :$Port" `
+        -WorkingDirectory $RepoRoot -Name "FastAPI on :$ApiPort" `
         -StdOutLog "$apiLog" -StdErrLog "$apiLog.err"
 
-    Wait-HttpOk -Url "http://127.0.0.1:$Port/api/health" -Label 'FastAPI' -Process $apiProc
-    Write-Ok "API healthy at http://127.0.0.1:$Port/api/health"
+    Wait-HttpOk -Url "http://127.0.0.1:$ApiPort/api/health" -Label 'FastAPI' -Process $apiProc
+    Write-Ok "API healthy at http://127.0.0.1:$ApiPort/api/health"
 
-    # In -Dev mode FastAPI is still needed: Vite proxies /api to it.
-    $targetPort = $Port
-    if ($Dev) {
+    # The public port is the same number in both modes, so a bookmarked URL and
+    # a shared tunnel link keep working when the mode changes.
+    $targetPort = $PublicPort
+
+    if ($HotReload) {
         $npm = Get-NpmCmd
         # Bind IPv4 explicitly. Vite's default is localhost, which on Windows can
         # resolve to ::1 only, and then 127.0.0.1 (the tunnel target) is refused.
+        # FITRI_API_PORT tells the dev server where the API actually ended up,
+        # since it is no longer the obvious :8000.
+        $env:FITRI_API_PORT = "$ApiPort"
+        $env:FITRI_UI_PORT  = "$PublicPort"
+        # --strictPort so a busy port is an error rather than a silent move to a
+        # different port, which would change the URL out from under the reader.
         $viteProc = Start-Child -FilePath $npm `
-            -ArgumentList @('run', 'dev', '--', '--port', "$VitePort", '--host', '127.0.0.1') `
-            -WorkingDirectory $FrontendDir -Name "Vite on :$VitePort" `
+            -ArgumentList @('run', 'dev', '--', '--port', "$PublicPort", '--strictPort',
+                            '--host', '127.0.0.1') `
+            -WorkingDirectory $FrontendDir -Name "Vite on :$PublicPort" `
             -StdOutLog "$viteLog" -StdErrLog "$viteLog.err"
 
-        Wait-HttpOk -Url "http://127.0.0.1:$VitePort/" -Label 'Vite dev server' -Process $viteProc
-        Write-Ok "Vite ready at http://127.0.0.1:$VitePort"
-        $targetPort = $VitePort
+        Wait-HttpOk -Url "http://127.0.0.1:$PublicPort/" -Label 'Vite dev server' -Process $viteProc
+        Write-Ok "Vite ready at http://127.0.0.1:$PublicPort (proxying /api to :$ApiPort)"
+
+        # Prove the proxy works rather than reporting the dev server up and
+        # leaving the reader to find out that the API is unreachable.
+        Wait-HttpOk -Url "http://127.0.0.1:$PublicPort/api/health" -Label 'API through the Vite proxy' -Process $viteProc
+        Write-Ok 'API reachable through the same origin as the page'
     }
 
     # ------------------------------------------------------------------ tunnel
@@ -285,8 +372,17 @@ try {
         Write-Host '  Public:  (disabled)' -ForegroundColor DarkGray
     }
     Write-Host "  Local:   $localUrl" -ForegroundColor Green
-    Write-Host "  API:     http://127.0.0.1:$Port/api/health" -ForegroundColor Green
+    if ($HotReload) {
+        Write-Host "  API:     http://127.0.0.1:$ApiPort/api/health  (via $localUrl/api)" -ForegroundColor Green
+    } else {
+        Write-Host "  API:     http://127.0.0.1:$ApiPort/api/health" -ForegroundColor Green
+    }
     Write-Host "  Logs:    $LogDir" -ForegroundColor Green
+    if ($HotReload) {
+        Write-Host '===============================================' -ForegroundColor Green
+        Write-Host '  Hot reload is on. Edit app/ or frontend/src/ and save -- no' -ForegroundColor Green
+        Write-Host '  restart, and the URL above stays the same. Ctrl+C to stop.' -ForegroundColor Green
+    }
     Write-Host '===============================================' -ForegroundColor Green
     Write-Host ''
 
@@ -305,24 +401,32 @@ try {
     Write-Host ''
     Write-Step 'Stopping'
 
+    # uvicorn's reloader runs the app in a *child* process whose command line is
+    # a multiprocessing bootstrap and never mentions main.py, and npm.cmd spawns
+    # node the same way. Killing only the parent would leave those children
+    # holding the ports, so the next start would fail on a port that looks free.
+    # /T takes each started process's own tree down, and only that tree: nothing
+    # here can reach a server this run did not start.
     foreach ($p in $children) {
-        if ($p) {
-            try {
-                if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
-            } catch { }
-        }
+        if (-not $p) { continue }
+        try {
+            if (-not $p.HasExited) {
+                & taskkill /PID $p.Id /T /F 2>&1 | Out-Null
+            }
+        } catch { }
     }
 
-    # npm.cmd spawns node as a child, so killing npm alone can leave the Vite
-    # server running. Sweep up anything still bound to this repo.
+    # Orphan sweep from an earlier run of this script: anything still running out
+    # of this repo that we did not start ourselves.
     foreach ($proc in (Get-Process python, node, cloudflared -ErrorAction SilentlyContinue)) {
+        if ($proc.Id -eq $PID) { continue }
         try {
             $cmdline = (Get-CimInstance Win32_Process -Filter "ProcessId=$($proc.Id)").CommandLine
             if (-not $cmdline) { continue }
             $ours = $cmdline -like "*$RepoRoot*main.py*dashboard*" -or
                     $cmdline -like "*$FrontendDir*" -or
                     $cmdline -like '*cloudflared*tunnel*'
-            if ($ours) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+            if ($ours) { & taskkill /PID $proc.Id /T /F 2>&1 | Out-Null }
         } catch { }
     }
 

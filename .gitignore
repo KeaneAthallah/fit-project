@@ -12,6 +12,10 @@ review/
 frontend/node_modules/
 frontend/dist/
 
+# Machine-local tool permissions (absolute paths, one-off session
+# commands). Every clone gets its own as the tool runs.
+.commandcode/settings.json
+
 # Source financial reports. The PDF corpus was replaced by the XBRL corpus
 # below and has been deleted; the rules stay so a stray filing dropped back in
 # is still ignored rather than committed.

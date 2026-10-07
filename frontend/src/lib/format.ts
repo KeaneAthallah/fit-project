@@ -205,6 +205,23 @@ export function relativeTime(iso: string | null | undefined): string {
   return `${Math.floor(secs / 86400)} hr lalu`
 }
 
+/** A tanggal pencatatan (listing date) as the register prints
+ *  it: `09/12/1997`. Indonesian convention, like the money
+ *  formatters: day, month, year. An unknown date is not a
+ *  date -- the caller shows an em dash -- and a malformed
+ *  one is likewise not guessed at. */
+export function formatDateID(iso: string | null | undefined): string {
+  if (!iso) return ''
+  // No timezone suffix: the date is a calendar day, and
+  // parsing it as UTC would shift it a day back in
+  // timezones behind the meridian.
+  const d = new Date(`${iso}T00:00:00`)
+  if (Number.isNaN(d.getTime())) return ''
+  const day = String(d.getDate()).padStart(2, '0')
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  return `${day}/${month}/${d.getFullYear()}`
+}
+
 /** `total_liabilities_and_equity` -> `Total liabilities and equity` */
 export function humanize(snake: string | null | undefined): string {
   if (!snake) return '—'

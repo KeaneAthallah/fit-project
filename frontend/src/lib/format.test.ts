@@ -8,6 +8,7 @@ import {
   deltaShort,
   deltaText,
   duration,
+  formatDateID,
   num,
   pct,
   rupiah,
@@ -159,6 +160,24 @@ describe('currencyLabel', () => {
 describe('titleCase', () => {
   it('turns a field name into a heading', () => {
     expect(titleCase('total_liabilities_and_equity')).toBe('Total Liabilities And Equity')
+  })
+})
+
+describe('formatDateID', () => {
+  it('prints the Indonesian day/month/year order', () => {
+    expect(formatDateID('1997-12-09')).toBe('09/12/1997')
+    expect(formatDateID('2022-08-04')).toBe('04/08/2022')
+  })
+
+  it('zero-pads single digits', () => {
+    expect(formatDateID('2020-01-05')).toBe('05/01/2020')
+  })
+
+  it('falls back to empty rather than printing a guess', () => {
+    expect(formatDateID(null)).toBe('')
+    expect(formatDateID(undefined)).toBe('')
+    expect(formatDateID('')).toBe('')
+    expect(formatDateID('not a date')).toBe('')
   })
 })
 

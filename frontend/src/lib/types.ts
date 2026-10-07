@@ -130,6 +130,10 @@ export interface SummaryRow {
    *  "Individuals"). The API may send an empty string and it is not
    *  guaranteed to be present. */
   subsector: string | null
+  /** The date the company's shares were listed on the exchange
+   *  (tanggal pencatatan), ISO format, from the listing register.
+   *  Null when the register does not know the company. */
+  pencatatan?: string | null
   cells: Record<string, SummaryCell | null>
   /** Reports a hand-entered figure on this row can be filed under, best first.
    *  A value must belong to a document, so an empty cell needs a target. */

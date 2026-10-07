@@ -17,12 +17,14 @@ matters for correctness:
   lowest id as a stable tie-break.
 """
 import io
+from datetime import date
 
 import pytest
 from fastapi.testclient import TestClient
 from openpyxl import Workbook, load_workbook
 
 from app.core.config import get_config, load_config, set_config
+from app.dashboard.pencatatan import Pencatatan
 from app.dashboard.server import create_app
 from app.storage.database import get_engine, get_session_factory
 from app.storage.repository import Repository
@@ -608,6 +610,136 @@ def test_the_no_net_loss_filter_narrows_the_export_too(client, tmp_path):
     assert "no net loss" in text
 
 
+def _register(entries: dict[str, date]) -> Pencatatan:
+    """A register seeded from full company names: the first
+    word stands in for the ticker and the rest for the
+    name, which is how the register and the database split
+    one company between them."""
+    register = Pencatatan()
+    for company, listed in entries.items():
+        words = company.split()
+        register.add(words[0], " ".join(words[1:]), listed)
+    return register
+
+
+def test_the_rugi_terus_filter_keeps_only_loss_years(client, tmp_path):
+    """The mirror of laba terus: only years that reported a
+    loss, and a year with no profit figure is not one of
+    them -- a missing number is evidence of neither
+    direction."""
+    Session = get_session_factory(
+        get_engine(client.app.dependency_overrides[get_config]())
+    )
+    with Session() as s:
+        repo = Repository(s)
+        doc, _ = repo.upsert_document(
+            str(tmp_path / "p.pdf"), "hash-p", "PT PROFIT Tbk", "p.pdf"
+        )
+        repo.replace_values(
+            doc,
+            [
+                _value(repo, doc, "total_profit_loss", 50_000.0, year=2024),
+                _value(repo, doc, "total_profit_loss", -10_000.0, year=2023),
+            ],
+        )
+
+    kept = {
+        (r["company"], r["year"]) for r in _rows(client, profitable="rugi")["items"]
+    }
+    assert ("PT PROFIT Tbk", 2023) in kept
+    assert ("PT PROFIT Tbk", 2024) not in kept
+    # The fixture holds no profit figures, so none of it
+    # counts as a loss either.
+    assert ("PT AAA Tbk", 2024) not in kept
+
+
+def test_the_rugi_filter_narrows_the_export_too(client, tmp_path):
+    Session = get_session_factory(
+        get_engine(client.app.dependency_overrides[get_config]())
+    )
+    with Session() as s:
+        repo = Repository(s)
+        doc, _ = repo.upsert_document(
+            str(tmp_path / "p.pdf"), "hash-p", "PT PROFIT Tbk", "p.pdf"
+        )
+        repo.replace_values(
+            doc,
+            [
+                _value(repo, doc, "total_profit_loss", 50_000.0, year=2024),
+                _value(repo, doc, "total_profit_loss", -10_000.0, year=2023),
+            ],
+        )
+
+    wb = _workbook(_export(client, profitable="rugi"))
+    assert [r[0] for r in _sheet_rows(wb["Summary"])] == ["PT PROFIT Tbk"]
+    # The filter the file was taken under is recorded in it.
+    text = "\n".join(str(c.value) for r in wb["Notes"].iter_rows() for c in r if c.value)
+    assert "net loss" in text
+
+
+def test_the_pencatatan_column_carries_the_listing_date(client, monkeypatch):
+    """Every row carries the date its company was listed, so
+    a reader can see how long the numbers span. A company
+    the register does not know shows null -- never a
+    guessed date."""
+    monkeypatch.setattr(
+        "app.dashboard.api.load_pencatatan",
+        lambda: _register({"PT AAA Tbk": date(1997, 12, 9)}),
+    )
+    body = _rows(client)
+    aaa = next(
+        r for r in body["items"]
+        if r["company"] == "PT AAA Tbk" and r["year"] == 2024
+    )
+    assert aaa["pencatatan"] == "1997-12-09"
+    bbb = next(
+        r for r in body["items"]
+        if r["company"] == "PT BBB Tbk" and r["year"] == 2024
+    )
+    assert bbb["pencatatan"] is None
+
+
+def test_the_listing_date_filter_keeps_only_companies_listed_before(
+    client, monkeypatch,
+):
+    """A company listed in 2022 cannot honestly be part of a
+    "before 2020" answer, and neither can one the register
+    does not know: an unknown date is not a "yes"."""
+    monkeypatch.setattr(
+        "app.dashboard.api.load_pencatatan",
+        lambda: _register({
+            "PT AAA Tbk": date(1997, 12, 9),
+            "PT BBB Tbk": date(2022, 8, 4),
+        }),
+    )
+    body = _rows(client, pencatatan_before=2020)
+    companies = {r["company"] for r in body["items"]}
+    assert companies == {"PT AAA Tbk"}
+
+
+def test_the_listing_date_filter_narrows_the_export_too(client, monkeypatch):
+    monkeypatch.setattr(
+        "app.dashboard.api.load_pencatatan",
+        lambda: _register({
+            "PT AAA Tbk": date(1997, 12, 9),
+            "PT BBB Tbk": date(2022, 8, 4),
+        }),
+    )
+
+    wb = _workbook(_export(client, pencatatan_before=2020))
+    assert [r[0] for r in _sheet_rows(wb["Summary"])] == [
+        "PT AAA Tbk", "PT AAA Tbk",
+    ]
+    # The Pencatatan column is the fifth, and carries the
+    # date as a real date cell.
+    listed = wb["Summary"]["E2"].value
+    assert listed is not None
+    assert listed.date() == date(1997, 12, 9)
+    # The filter the file was taken under is recorded in it.
+    text = "\n".join(str(c.value) for r in wb["Notes"].iter_rows() for c in r if c.value)
+    assert "listed before 2020" in text
+
+
 def test_coverage_names_the_companies_that_have_not_been_read(client):
     """The gap must be stated, not left as a silent omission.
 
@@ -912,8 +1044,10 @@ class TestExcelExport:
         wb = _workbook(_export(client))
         assert wb.sheetnames[0] == "Summary"
         head = [c.value for c in wb["Summary"][1]]
-        assert head[:4] == ["Company", "Year", "Currency", "Sub-sector"]
-        assert head[4:6] == ["Total assets", "Total equity"]
+        assert head[:5] == [
+            "Company", "Year", "Currency", "Sub-sector", "Pencatatan",
+        ]
+        assert head[5:7] == ["Total assets", "Total equity"]
         assert head[-2:] == ["Checks failed", "Source documents"]
 
     def test_figures_are_numbers_so_the_recipient_can_total_them(self, client):
@@ -921,9 +1055,9 @@ class TestExcelExport:
         workbook rather than a picture of the grid."""
         row = next(r for r in _sheet_rows(_workbook(_export(client))["Summary"])
                    if r[0] == "PT AAA Tbk")
-        # Column 3 is the sub-sector; the first figure follows it.
-        assert row[4] == 1_000_000.0
-        assert isinstance(row[4], (int, float))
+        # Column 4 is the listing date; the first figure follows it.
+        assert row[5] == 1_000_000.0
+        assert isinstance(row[5], (int, float))
 
     def test_an_absent_figure_stays_empty_rather_than_becoming_zero(self, client):
         """A blank means "no report disclosed this line", which is a different
@@ -931,7 +1065,7 @@ class TestExcelExport:
         row = next(r for r in _sheet_rows(_workbook(_export(client))["Summary"])
                    if r[0] == "PT CCC Tbk")
         assert row[0] == "PT CCC Tbk"
-        assert row[4] is None, "CCC has sales but no total_assets"
+        assert row[5] is None, "CCC has sales but no total_assets"
 
     def test_it_covers_every_row_not_just_the_visible_page(self, client, tmp_path):
         """The grid pages at 50. An export that inherited the page size would
@@ -978,14 +1112,14 @@ class TestExcelExport:
         assert [r[0] for r in rows] == ["PT BBB Tbk"]
         # total_assets on that row is undetected, so USD filtering must leave it
         # empty rather than reporting it under the wrong currency.
-        assert rows[0][4] is None
-        assert rows[0][8] == 120_000.0
+        assert rows[0][5] is None
+        assert rows[0][9] == 120_000.0
 
     def test_it_carries_the_same_columns_as_the_grid(self, client):
         """A file whose columns differ from the screen cannot be read against it."""
         grid = _rows(client)
         head = [c.value for c in _workbook(_export(client))["Summary"][1]]
-        assert head[4:-2] == [grid["labels"][f] for f in grid["fields"]]
+        assert head[5:-2] == [grid["labels"][f] for f in grid["fields"]]
 
     def test_a_row_whose_figures_do_not_reconcile_says_so_in_the_file(self, client):
         """The grid badges this row. An export that dropped the warning would be

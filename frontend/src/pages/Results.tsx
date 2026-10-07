@@ -5,7 +5,7 @@ import { useAction, useLiveRefresh, useQuery } from '../hooks/useQuery'
 import type { QueryState } from '../hooks/useQuery'
 import { useProcessing } from '../lib/processing-context'
 import { useUrlFilters } from '../hooks/useFilters'
-import { currencyLabel, currencyOptions, rupiah, titleCase } from '../lib/format'
+import { currencyLabel, currencyOptions, formatDateID, rupiah, titleCase } from '../lib/format'
 import { fieldLabel } from '../lib/field-labels'
 import { companyPath } from '../lib/paths'
 import { results as s } from '../lib/strings'
@@ -23,7 +23,6 @@ import {
   Button,
   ButtonLink,
   Card,
-  Checkbox,
   EmptyState,
   ErrorBanner,
   Input,
@@ -37,13 +36,13 @@ import {
   Th,
 } from '../components/ui'
 
-const FILTER_KEYS = ['company', 'year', 'currency', 'subsector', 'profitable', 'page'] as const
+const FILTER_KEYS = ['company', 'year', 'currency', 'subsector', 'profitable', 'pencatatan', 'page'] as const
 
 // The keys that are genuinely filters. `page` is pagination rather than a
 // filter, so counting it would tell the reader they have a filter applied when
 // they have not, and "Clear N filters" would throw away their place in the
 // results along with the filters.
-const CLEARABLE_KEYS = ['company', 'year', 'currency', 'subsector', 'profitable'] as const
+const CLEARABLE_KEYS = ['company', 'year', 'currency', 'subsector', 'profitable', 'pencatatan'] as const
 
 // The sub-sector filter holds several classifications at once, so it travels
 // as repeated URL parameters rather than one joined string.
@@ -884,10 +883,32 @@ function SummaryGrid({
     return () => window.removeEventListener('keydown', onKey)
   }, [activeCell])
 
-  // The URL carries the checkbox as the literal string 'true'. Anything
-  // else a hand-edited link might carry reads as off, so the control and
-  // the request can never disagree about whether the filter is applied.
-  const profitable = values.profitable === 'true'
+  // The profit filter is a dropdown now: 'laba' or 'rugi'. A link
+  // saved while it was still a checkbox carries the literal 'true',
+  // which meant laba -- it keeps its meaning rather than silently
+  // becoming "no filter". Anything else a hand-edited link might
+  // carry reads as off, so the control and the request can never
+  // disagree about whether the filter is applied.
+  const profitMode =
+    values.profitable === 'true'
+      ? 'laba'
+      : values.profitable === 'laba' || values.profitable === 'rugi'
+        ? values.profitable
+        : ''
+  // The hint describes the choice in force rather than the control,
+  // so a reader sees what the current answer means.
+  const profitHint =
+    profitMode === 'laba'
+      ? s.grid.noNetLossHint
+      : profitMode === 'rugi'
+        ? s.grid.lossOnlyHint
+        : s.grid.profitFilterHint
+
+  // The listing-date filter narrows to companies whose shares were
+  // recorded before a year. The register is the source of truth: a
+  // company it does not know has no date, and an unknown is not a
+  // "before 2020".
+  const pencatatan = values.pencatatan
 
   const summary = useQuery(
     () =>
@@ -896,24 +917,26 @@ function SummaryGrid({
         year: values.year,
         currency: values.currency,
         subsector: selectedSubsectors,
-        profitable: profitable ? 'true' : '',
+        profitable: profitMode,
+        pencatatan_before: pencatatan,
         page,
         page_size: PAGE_SIZE,
       }),
     // The filters are the dependencies: leaving any out would let the
     // URL change without the grid noticing.
-    [values.company, values.year, values.currency, selectedSubsectors, profitable, page],
+    [values.company, values.year, values.currency, selectedSubsectors, profitMode, pencatatan, page],
   )
 
   // The export takes the same filters as the grid, and not the page number: a
-  // file that held only the rows on screen would be indistinguishable from the
+  // file that held only the visible page would be indistinguishable from the
   // whole answer unless the reader already knew to check.
   const exportParams = {
     company: values.company,
     year: values.year,
     currency: values.currency,
     subsector: selectedSubsectors,
-    profitable: profitable ? 'true' : '',
+    profitable: profitMode,
+    pencatatan_before: pencatatan,
   }
 
   // The grid is the thing being built by a batch, so it polls while one runs.
@@ -985,18 +1008,37 @@ function SummaryGrid({
           values={selectedSubsectors}
           onChange={(picked) => setParam('subsector', picked)}
         />
-        {/* "No net loss" is a claim about the bottom line rather than a
-            column: the server keeps the company-years whose net result is
-            above zero whether or not the profit column is on screen, and
-            drops the rest -- including years with no profit figure at all,
-            because a missing number is not evidence of a profit. */}
-        <Checkbox
-          label={s.grid.noNetLoss}
-          hint={s.grid.noNetLossHint}
-          checked={profitable}
-          onChange={(e) =>
-            setParam('profitable', e.target.checked ? 'true' : '')
-          }
+        {/* "Laba terus"/"Rugi terus" are claims about the bottom
+            line rather than a column: the server keeps the
+            company-years whose net result points the chosen way
+            whether or not the profit column is on screen, and
+            drops the rest -- including years with no profit figure
+            at all, because a missing number is evidence of neither. */}
+        <Select
+          label={s.grid.profitFilter}
+          hint={profitHint}
+          options={[
+            { value: '', label: s.grid.allProfit },
+            { value: 'laba', label: s.grid.noNetLoss },
+            { value: 'rugi', label: s.grid.lossOnly },
+          ]}
+          value={profitMode}
+          onChange={(e) => setParam('profitable', e.target.value)}
+        />
+        {/* The listing date is a property of the company, not
+            of the year, so this filter narrows whole companies:
+            a share listed in 2022 cannot honestly report a 2019
+            figure. A company the register does not know has no
+            date to judge by and leaves with them. */}
+        <Select
+          label={s.grid.pencatatan}
+          hint={s.grid.pencatatanHint}
+          options={[
+            { value: '', label: s.grid.allPencatatan },
+            { value: '2020', label: s.grid.before2020 },
+          ]}
+          value={pencatatan}
+          onChange={(e) => setParam('pencatatan', e.target.value)}
         />
       </div>
 
@@ -1051,6 +1093,7 @@ function SummaryGrid({
                   <Th>{s.grid.year}</Th>
                   <Th hideBelow="lg">{s.grid.currency}</Th>
                   <Th>{s.grid.subsector}</Th>
+                  <Th hideBelow="lg">{s.grid.pencatatan}</Th>
                   {data.fields.map((field, i) => (
                     <Th
                       key={field}
@@ -1171,6 +1214,16 @@ function SummaryGrid({
                             {row.subsector || '—'}
                           </span>
                         </Td>
+                        {/* The listing date is an identity of the
+                            company, so it sits with the other
+                            identity columns; a company the register
+                            does not know shows an em dash, never a
+                            guessed date. */}
+                        <Td hideBelow="lg" className="text-xs">
+                          <span className="text-muted-foreground">
+                            {formatDateID(row.pencatatan) || '—'}
+                          </span>
+                        </Td>
                         {data.fields.map((field, i) => {
                           const cell = row.cells[field] ?? null
                           return (
@@ -1208,7 +1261,7 @@ function SummaryGrid({
                       </tr>
                       {detailsOpen && (
                         <CompanySources
-                          colSpan={3 + data.fields.length}
+                          colSpan={4 + data.fields.length}
                           company={row.company}
                           year={row.year}
                           currency={row.currency}
@@ -1226,7 +1279,7 @@ function SummaryGrid({
                             // while `cell` had already moved on -- and saving would
                             // then write one figure's value over another.
                             key={`dispute:${rowKey}:${open.field}`}
-                            colSpan={3 + data.fields.length}
+                            colSpan={4 + data.fields.length}
                             cell={open.cell}
                             company={open.company}
                             year={open.year}
@@ -1242,7 +1295,7 @@ function SummaryGrid({
                             key={`edit:${rowKey}:${open.field}`}
                             cell={open.cell}
                             mode={open.mode}
-                            colSpan={3 + data.fields.length}
+                            colSpan={4 + data.fields.length}
                             company={open.company}
                             year={open.year}
                             field={open.field}

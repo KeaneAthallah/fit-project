@@ -317,6 +317,18 @@ export const results = {
       'Klasifikasi bisnis yang dideklarasikan pada sampul laporan. Satu per perusahaan; pilih beberapa untuk membandingkannya.',
     allSubsectors: 'Semua subsektor',
     noSubsectorDeclared: 'Tanpa subsektor yang dideklarasikan',
+    pencatatan: 'Tanggal Pencatatan',
+    pencatatanHint:
+      'Tanggal saham perusahaan dicatat di bursa. "Di bawah tahun 2020" menampilkan hanya perusahaan yang tercatat sebelum 2020; perusahaan tanpa tanggal ikut disembunyikan.',
+    allPencatatan: 'Semua tanggal',
+    before2020: 'Di bawah tahun 2020',
+    profitFilter: 'Laba/Rugi',
+    profitFilterHint:
+      'Saring baris menurut arah labanya: hanya yang melaporkan laba, atau hanya yang melaporkan rugi.',
+    allProfit: 'Semua',
+    lossOnly: 'Rugi terus',
+    lossOnlyHint:
+      'Hanya perusahaan-tahun yang melaporkan rugi. Tahun yang laba, atau tidak menunjukkan angka rugi, ditinggalkan.',
     noNetLoss: 'Laba terus',
     noNetLossHint:
       'Hanya perusahaan-tahun yang melaporkan laba. Tahun yang rugi, atau tidak menunjukkan angka laba, ditinggalkan.',

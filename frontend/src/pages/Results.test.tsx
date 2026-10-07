@@ -421,24 +421,78 @@ describe('Filter selects on the summary', () => {
     ).toBeTruthy()
   })
 
-  it('records the no-net-loss filter as a URL flag and re-queries', async () => {
+  it('records the laba-rugi filter as a URL flag and re-queries', async () => {
     renderResults()
-    fireEvent.click(screen.getByLabelText(/^laba terus$/i))
+    // The checkbox became a dropdown: picking "Rugi terus"
+    // puts the mode in the URL, not a boolean.
+    choose(/^laba\/rugi$/i, 'rugi')
 
     await waitFor(() => {
-      expect(params().get('profitable')).toBe('true')
+      expect(params().get('profitable')).toBe('rugi')
     })
     expect(params().get('page')).toBeNull()
     await waitFor(() =>
       expect(apiMock.resultsSummary).toHaveBeenLastCalledWith(
-        expect.objectContaining({ profitable: 'true' }),
+        expect.objectContaining({ profitable: 'rugi' }),
       ),
     )
 
-    // Switching it off must take the flag back out of the URL, or the
-    // grid would stay narrowed after the box was unticked.
-    fireEvent.click(screen.getByLabelText(/^laba terus$/i))
+    // Back to "Semua" must take the flag back out of the URL,
+    // or the grid would stay narrowed after the reader reset it.
+    choose(/^laba\/rugi$/i, '')
     await waitFor(() => expect(params().get('profitable')).toBeNull())
+  })
+
+  it('reads a checkbox-era link as laba terus', async () => {
+    // A link saved while the filter was still a checkbox
+    // carries the literal 'true', which meant laba: it
+    // keeps its meaning rather than silently becoming "no
+    // filter".
+    renderResults('?profitable=true')
+    const select = (await screen.findByLabelText(
+      /^laba\/rugi$/i,
+    )) as HTMLSelectElement
+    expect(select.value).toBe('laba')
+    await waitFor(() =>
+      expect(apiMock.resultsSummary).toHaveBeenLastCalledWith(
+        expect.objectContaining({ profitable: 'laba' }),
+      ),
+    )
+  })
+
+  it('records the listing-date filter in the URL and re-queries', async () => {
+    renderResults()
+    choose(/^tanggal pencatatan$/i, '2020')
+
+    await waitFor(() => {
+      expect(params().get('pencatatan')).toBe('2020')
+    })
+    expect(params().get('page')).toBeNull()
+    await waitFor(() =>
+      expect(apiMock.resultsSummary).toHaveBeenLastCalledWith(
+        expect.objectContaining({ pencatatan_before: '2020' }),
+      ),
+    )
+
+    choose(/^tanggal pencatatan$/i, '')
+    await waitFor(() => expect(params().get('pencatatan')).toBeNull())
+  })
+
+  it('shows the listing date in Indonesian order', async () => {
+    apiMock.resultsSummary.mockResolvedValue({
+      ...TWO_FIGURES,
+      items: [{ ...TWO_FIGURES.items[0], pencatatan: '1997-12-09' }],
+    })
+    renderResults()
+    // Day, month, year, like the money formatters.
+    expect(await screen.findByText('09/12/1997')).toBeTruthy()
+  })
+
+  it('shows an em dash where the register does not know the company', async () => {
+    renderResults()
+    // The fixture row carries no pencatatan: an unknown
+    // date is an em dash, never a blank to guess at.
+    expect(await screen.findByText('—')).toBeTruthy()
   })
 
   it('re-queries when the subsektor filter changes, not just the other filters', async () => {

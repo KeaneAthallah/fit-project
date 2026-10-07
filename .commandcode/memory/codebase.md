@@ -33,13 +33,6 @@ orientation: where things live, the non-obvious rules, and how to validate work.
   never conflated with IDR.
 - Figures are shown digit-for-digit (no rounding/abbreviation, even in Excel).
   Hand-entered values are range-checked at `2**53 - 1`.
-- The product is organized around **nine primary indicators** — total_assets,
-  equity_attributable_to_owners_of_parent, non_controlling_interest,
-  total_equity, sales_and_revenue, total_profit_loss_before_tax,
-  total_profit_loss, net_income, income_tax_paid_operating
-  (`OVERVIEW_FIELDS` in `frontend/src/lib/metrics.ts`; the same list drives
-  `FINANCIAL_COVERAGE_FIELDS` in `app/dashboard/api.py`). They are the core
-  information hierarchy on both the entity page and the home dashboard.
 - **Disputed readings**: when a field's readings disagree by more than half
   of the max (`_is_disputed`, DISPUTE_THRESHOLD), the grid picks NO winner —
   the cell is flagged `disputed` and carries every reading as `candidates`.
@@ -52,6 +45,15 @@ orientation: where things live, the non-obvious rules, and how to validate work.
   bare and `-an` forms (`juta`/`jutaan`...).
 - Confidence tiers: 1.0 primary statement page, 0.9 year zipped to a table header
   column, 0.75 notes/unsectioned page.
+- **Tanggal pencatatan** (IDX listing date) comes from
+  `tanggal pencatatan.xlsx` at the repo root (kode, nama, tanggal per
+  company), joined onto every results row by normalized company name
+  (PT/Tbk. and punctuation ignored, ticker optional —
+  `app/dashboard/pencatatan.py`, cached by mtime). The "Di bawah tahun
+  2020" filter keeps only companies listed before that year; a company
+  the register does not know is hidden — an unknown is not a "yes". A
+  missing or empty register raises rather than silently returning an
+  empty mapping.
 
 ## Backend (`app/`)
 
@@ -70,6 +72,7 @@ orientation: where things live, the non-obvious rules, and how to validate work.
 - `pipeline/` processor + orchestrator (thread pool, resumable via DB)
 - `export/` excel.py (openpyxl workbook), csv_export, reports
 - `dashboard/` FastAPI JSON API (`api.py`) + SPA static hosting (`server.py`)
+  + the listing register (`pencatatan.py`)
 - `cli/` click commands: scan, process, run, export, status, inspect, diagnose,
   diagnose-validation, remap-fields, retry-failed, retry-review, dashboard
 
@@ -89,14 +92,16 @@ orientation: where things live, the non-obvious rules, and how to validate work.
   `FINANCIAL_LEADER_FIELDS` = total_assets / sales_and_revenue /
   total_equity / total_profit_loss; top 8 by the company's LATEST reported
   year, not the largest single reading), `coverage` (distinct companies
-  reporting each of the nine indicators). Computed with the grid's winner
+  reporting each indicator). Computed with the grid's winner
   rules (`_summary_rank`), so a leader can never disagree with the grid.
   Undated readings (year null) count toward coverage but never win a
   "latest" slot. Covered by `TestFinancialPulse` in `tests/test_results_summary.py`.
 - `/results/summary` returns `{items, fields, labels, currencies, subsectors,
   pagination}`. The `currencies`/`subsectors` lists are **scoped facets**: they
   respect the other filters but never their own (so every option returns rows), and
-  a filter in force is always offered even at count 0.
+  a filter in force is always offered even at count 0. Every row also carries
+  `pencatatan` (ISO listing date, null when the register does not know the
+  company).
 - Multi-select filters travel as **repeated query params** (`?subsector=a&subsector=b`),
   never comma-joined — real classifications contain commas.
 - Summary grid decision rules live in `_summary_scope` (one winner per
@@ -172,14 +177,20 @@ orientation: where things live, the non-obvious rules, and how to validate work.
 - One row per (company, year), one column per extracted field. Click a figure to
   correct (PATCH, original kept in `original_value`, Revert restores it); click an
   empty cell to hand-add (POST — recorded as manual from the start).
-- Filters: company, year, currency, sub-sector (multi), no-net-loss (`profitable`),
+- Filters: company, year, currency, sub-sector (multi), laba/rugi
+  (`profitable` carries 'laba'/'rugi' — a checkbox-era link with
+  the literal 'true' still means laba), and listing date
+  (`pencatatan` = a year, sent as `pencatatan_before`; only
+  companies listed before that year, unknown companies hidden),
   all in the URL. Page resets whenever a filter changes.
 - Disputed cells open `DisputeChooser` (all readings with value/raw text/report/
   page/confidence; "Gunakan ini" PATCHes the choice). `CoverageNotice` explains
   companies absent from the grid because their filings produced no figures;
   `CompanySources` shows per-row source documents and failed checks.
-- Excel export column order: Company, Year, Currency, Sub-sector, Total assets,
-  Total equity, Sales and revenue, Sales, Net income, Checks failed, Source documents.
+- Excel export column order: Company, Year, Currency, Sub-sector,
+  Pencatatan (a real date cell, DD/MM/YYYY), Total assets,
+  Total equity, Sales and revenue, Sales, Net income, Checks failed,
+  Source documents.
 
 ## Tests
 

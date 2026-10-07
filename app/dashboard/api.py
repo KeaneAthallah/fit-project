@@ -18,6 +18,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 
 from app.core.config import AppConfig, get_config
+from app.dashboard.pencatatan import load_pencatatan
 from app.financial.mappings import FIELD_LABELS
 from app.storage.database import get_engine, get_session_factory
 from app.storage.models import ExtractedValue, ValidationResult
@@ -997,6 +998,18 @@ def create_value(
 # the results grid
 # --------------------------------------------------------------------------
 
+
+def _profit_mode(profitable: str | None) -> str | None:
+    """`profitable` carries 'laba' or 'rugi' -- the dropdown the
+    checkbox became. A link saved while it was still a checkbox
+    carries the literal 'true', which meant laba, so it keeps that
+    meaning rather than silently turning into "no filter"."""
+    value = (profitable or "").strip().lower()
+    if value in ("true", "1", "on", "yes"):
+        return "laba"
+    return value if value in ("laba", "rugi") else None
+
+
 def _summary_scope(
     cfg: AppConfig,
     *,
@@ -1005,7 +1018,8 @@ def _summary_scope(
     year: int | None,
     currency: str | None,
     subsector: list[str] | None = None,
-    profitable: bool = False,
+    profitable: str | None = None,
+    pencatatan_before: int | None = None,
 ) -> tuple[
     list[dict[str, Any]], list[str], dict[str, str],
     list[dict[str, Any]], list[dict[str, Any]],
@@ -1013,8 +1027,8 @@ def _summary_scope(
     """Every summary row the filters admit, plus its columns and labels.
 
     The grid and the Excel export both start here, so a downloaded workbook is
-    the table on screen rather than a second and slightly different answer to the
-    same question. Pagination is left to the caller: a download that quietly
+    the table on screen rather than a second and slightly different answer to
+    the same question. Pagination is left to the caller: a download that quietly
     contained only the visible page would be worse than no download at all.
     """
     Session = get_session_factory(get_engine(cfg))
@@ -1023,6 +1037,12 @@ def _summary_scope(
         values = repo.all_values()
         docs = {d.id: d for d in repo.all_documents()}
         checks = repo.all_validations()
+
+    # The listing register is reference data, read straight from the
+    # workbook. It is loaded even when no filter asks for it: the grid
+    # shows the date on every row.
+    pencatatan = load_pencatatan()
+    profit_mode = _profit_mode(profitable)
 
     scoped = values
     if company:
@@ -1111,6 +1131,10 @@ def _summary_scope(
 
     rows: list[dict[str, Any]] = []
     for (comp, yr), by_field in grouped.items():
+        # When the company's shares were listed, from the
+        # register: an identity of the company, not of the year,
+        # so it is read once here rather than per field.
+        listed = pencatatan.get(comp)
         cells: dict[str, Any] = {}
         for field in columns:
             readings = by_field.get(field)
@@ -1141,6 +1165,7 @@ def _summary_scope(
             "year": yr,
             "currency": _row_currency(cells),
             "subsector": subsector_of.get(comp),
+            "pencatatan": listed.isoformat() if listed else None,
             "cells": cells,
             # A value must belong to a document, so an empty cell needs a target.
             "documents": [
@@ -1157,13 +1182,35 @@ def _summary_scope(
     rows.sort(key=lambda r: (r["company"].lower(),
                              (1, 0) if r["year"] is None else (0, -r["year"])))
 
-    # "No loss" keeps the company-years whose net result is above zero. A year
-    # with no figure is not a pass: absence of a loss is not evidence of profit,
-    # and a row that merely failed to extract must not be counted as healthy.
-    if profitable:
+    # "Laba terus" and "Rugi terus" are claims about the bottom
+    # line rather than a column: the server keeps the
+    # company-years whose net result points the chosen way
+    # whether or not the profit column is on screen, and drops
+    # the rest -- including years with no profit figure at all,
+    # because a missing number is evidence of neither a profit
+    # nor a loss.
+    if profit_mode == "laba":
         rows = [
             r for r in rows
             if profit_by_key.get((r["company"], r["year"]), 0.0) > 0
+        ]
+    elif profit_mode == "rugi":
+        rows = [
+            r for r in rows
+            if profit_by_key.get((r["company"], r["year"]), 0.0) < 0
+        ]
+
+    # "Di bawah tahun 2020" is a claim about the company, not
+    # the year: shares listed in 2022 cannot honestly report a
+    # 2019 figure, so those rows leave. A company the register
+    # does not know has no date to judge by and leaves with
+    # them -- an unknown is not a "yes".
+    if pencatatan_before is not None:
+        cutoff = dt.date(pencatatan_before, 1, 1)
+        rows = [
+            r for r in rows
+            if r["pencatatan"] is not None
+            and dt.date.fromisoformat(r["pencatatan"]) < cutoff
         ]
 
     # Scoped the way the currency list is: it respects the other filters but not
@@ -1209,14 +1256,21 @@ def results_summary(
     year: int | None = None,
     currency: str | None = None,
     subsector: list[str] = Query([]),
-    profitable: bool = False,
+    profitable: str | None = None,
+    pencatatan_before: int | None = Query(None, ge=1900, le=2100),
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=500),
 ) -> dict[str, Any]:
-    rows, columns, labels, currencies, subsectors = _summary_scope(
-        cfg, fields=fields, company=company, year=year, currency=currency,
-        subsector=subsector, profitable=profitable,
-    )
+    try:
+        rows, columns, labels, currencies, subsectors = _summary_scope(
+            cfg, fields=fields, company=company, year=year, currency=currency,
+            subsector=subsector, profitable=profitable,
+            pencatatan_before=pencatatan_before,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        # The listing register is required input: a missing or
+        # unreadable workbook is stated, not silently skipped.
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     return {
         "items": _page_of(rows, page, page_size),
         "fields": columns,
@@ -1235,7 +1289,8 @@ def results_summary_export(
     year: int | None = None,
     currency: str | None = None,
     subsector: list[str] = Query([]),
-    profitable: bool = False,
+    profitable: str | None = None,
+    pencatatan_before: int | None = Query(None, ge=1900, le=2100),
 ) -> Response:
     """The summary grid as a workbook, filtered exactly as the screen is.
 
@@ -1246,10 +1301,14 @@ def results_summary_export(
     """
     from app.export.excel import summary_grid_workbook
 
-    rows, columns, labels, _, _ = _summary_scope(
-        cfg, fields=fields, company=company, year=year, currency=currency,
-        subsector=subsector, profitable=profitable,
-    )
+    try:
+        rows, columns, labels, _, _ = _summary_scope(
+            cfg, fields=fields, company=company, year=year, currency=currency,
+            subsector=subsector, profitable=profitable,
+            pencatatan_before=pencatatan_before,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     # The filters go into the workbook too: a file with no record of what it
     # was narrowed to cannot be checked against the screen it came from.
     applied: dict[str, Any] = {
@@ -1258,8 +1317,13 @@ def results_summary_export(
          ("subsector", "; ".join(subsector) if subsector else None))
         if v
     }
-    if profitable:
+    mode = _profit_mode(profitable)
+    if mode == "laba":
         applied["profitable"] = "no net loss"
+    elif mode == "rugi":
+        applied["profitable"] = "net loss"
+    if pencatatan_before is not None:
+        applied["pencatatan"] = f"listed before {pencatatan_before}"
     body = summary_grid_workbook(rows, columns, labels, applied)
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M")
     return Response(

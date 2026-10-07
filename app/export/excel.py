@@ -131,7 +131,7 @@ def summary_grid_workbook(
     ws = wb.active
     ws.title = "Summary"
 
-    headings = ["Company", "Year", "Currency", "Sub-sector"]
+    headings = ["Company", "Year", "Currency", "Sub-sector", "Pencatatan"]
     headings += [labels.get(f, f.replace("_", " ").capitalize()) for f in columns]
     headings += ["Checks failed", "Source documents"]
     ws.append(headings)
@@ -154,14 +154,19 @@ def summary_grid_workbook(
             figures.append(
                 cell.get("normalized_value") if isinstance(cell, dict) else None
             )
+        listed = row.get("pencatatan")
         ws.append([
             row.get("company"),
             row.get("year"),
             row.get("currency"),
-            # Stated as filed, code prefix and all. Two filings describing one
-            # sector are left as the two strings they are: merging them here
-            # would assert an equivalence the source never made.
+            # Stated as filed, code prefix and all. Two filings describing
+            # one sector are left as the two strings they are: merging them
+            # here would assert an equivalence the source never made.
             row.get("subsector"),
+            # A real date cell, so a recipient can sort on it and
+            # reformat it; the number format below prints it
+            # DD/MM/YYYY, the convention the register itself uses.
+            dt.date.fromisoformat(listed) if listed else None,
             *figures,
             ", ".join(failed),
             ", ".join(sources),
@@ -171,7 +176,7 @@ def summary_grid_workbook(
 
     ncols = len(headings)
     nrows = len(rows)
-    first_figure, last_figure = 5, 4 + len(columns)
+    first_figure, last_figure = 6, 5 + len(columns)
 
     for c in range(1, ncols + 1):
         cell = ws.cell(row=1, column=c)
@@ -198,18 +203,21 @@ def summary_grid_workbook(
             if first_figure <= c <= last_figure:
                 cell.number_format = MONEY_FMT
                 cell.alignment = Alignment(horizontal="right")
+            elif c == 5:
+                cell.number_format = "DD/MM/YYYY"
+                cell.alignment = Alignment(horizontal="center")
             elif c == 2:
                 cell.alignment = Alignment(horizontal="center")
 
-    # Freeze the header row and the three identity columns: the figure columns
-    # are the ones that scroll away, and a number with no company beside it is
-    # not readable.
+    # Freeze the header row and the four identity columns: the figure
+    # columns are the ones that scroll away, and a number with no
+    # company beside it is not readable.
     ws.freeze_panes = ws.cell(row=2, column=min(first_figure, ncols))
 
     if nrows > 0:
         ws.auto_filter.ref = f"A1:{get_column_letter(ncols)}{nrows + 1}"
 
-    _set_widths(ws, [38, 8, 14] + [20] * len(columns) + [26, 44])
+    _set_widths(ws, [38, 8, 14, 14] + [20] * len(columns) + [26, 44])
 
     _notes_sheet(wb, rows=rows, columns=columns, filters=filters or {})
     return _to_bytes(wb)
